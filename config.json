@@ -1,0 +1,6 @@
+{
+    "bib_files": [
+        "/home/hzhao/Documents/bib/**/*.bib",
+        "/home/hzhao/test.bib"
+    ]
+}
