@@ -19,6 +19,8 @@ import pybtex.database
 class BibEntry:
     def __init__(self, source):
         self.source = source
+        self.mark = None
+        self.mark_widget = urwid.AttrMap(urwid.Text(('mark_none', "[M]"), align='right'), None)
 
     def Authors(self): return NotImplemented
     def Title(self): return NotImplemented
@@ -67,6 +69,7 @@ class BibEntry:
             def keypress(self, size, key):
                 if key != ' ': return key
                 details_panel.original_widget = self.entry.MakeDetailPage()
+                picked_panel.original_widget.Toggle(self.entry)
 
         title = urwid.AttrMap(urwid.Text(self.Title()), 'title')
         info = urwid.Text([('author', f"{self.AbbrevAuthors()}"),
@@ -79,12 +82,35 @@ class BibEntry:
                              ('delim', "::"),
                              ('bibkey', f"{self.BibKey()}")])
 
-        pile = SearchCandidate(self, [title, info, source])
+        pile = SearchCandidate(self, [urwid.AttrMap(urwid.Columns([('weight', 1, title),
+                                                                   ('pack', self.mark_widget)],
+                                                                  dividechars=1), 'title'),
+                                      info, source])
 
         return urwid.AttrMap(pile, None, {palette_key: str(palette_key) + '+'
                              for palette_key in ['title', 'author', 'delim',
                                                  'venue', 'year', 'source',
-                                                 'bibkey', None]})
+                                                 'bibkey', 'mark_none',
+                                                 'mark_selected',
+                                                 'title_delim', None]})
+
+    def Mark(self, mark):
+        if mark is None:
+            self.mark_widget.original_widget.set_text([('title_delim', "["),
+                                                       ('mark_none', " "),
+                                                       ('title_delim', "]")])
+        elif mark == 'selected':
+            self.mark_widget.original_widget.set_text([('title_delim', "["),
+                                                       ('mark_selected', "X"),
+                                                       ('title_delim', "]")])
+        else:
+            raise ValueError(f"Invalid mark: {mark}")
+
+    def UniqueKey(self):
+        return f"{self.Source()}::{self.BibKey()}"
+
+    def UniqueKeyItem(self):
+        return urwid.Text([('selected_key', self.BibKey()), ('selected_hint', f"({self.Source()})")])
 
 class DblpBibEntry(BibEntry):
     def __init__(self, dblp_entry):
@@ -220,6 +246,7 @@ class BibRepo:
         self.searching_thread = threading.Thread(name=f"search-{self.source}",
                                                  target=self.SearchingThreadWrapper,
                                                  daemon=True)
+        self.picked_entries = None
 
         self.SetStatus("initialized")
         self.loading_thread.start()
@@ -287,6 +314,12 @@ class BibRepo:
 
             try:
                 for item in self.SearchingThreadMain(self.search_text):
+
+                    if item.BibKey() in self.picked_entries.original_widget.entries.keys():
+                        item.Mark('selected')
+                    else:
+                        item.Mark(None)
+
                     for sink in self.search_result_sinks:
                         sink.Add(item, serial)
             except Exception as e:
@@ -302,8 +335,13 @@ class BibRepo:
 
     def Redraw(self):
         with BibRepo.REDRAW_LOCK:
-            try: self.event_loop.draw_screen()
+            try:
+                #XXX: Will sometimes tear the screen
+                self.event_loop.draw_screen()
             except: pass
+
+    def AttachPickedEntries(self, picked_entries):
+        self.picked_entries = picked_entries
 
 class LocalBibRepo(BibRepo):
     def __init__(self, glob_expr, event_loop):
@@ -380,6 +418,7 @@ class SearchResultSink:
         self.parent = box_widget
         self.serial = 0
         self.serial_lock = threading.Lock()
+        self.picked_pool = None
         self.Clear()
 
     def Clear(self):
@@ -402,6 +441,34 @@ class SearchResultSink:
         urwid.connect_signal(new_list_walker, 'modified', SearchResultSink.ListWalkerModifiedHandler(new_list_walker))
         self.parent.original_widget = urwid.ListBox(new_list_walker)
 
+class PickedEntries(urwid.Pile):
+    def __init__(self, *args, **kwargs):
+        super().__init__([], **kwargs)
+        self.entries = {}
+        self.Push()
+
+    def Toggle(self, entry):
+        key = entry.UniqueKey()
+        if key in self.entries:
+            del self.entries[key]
+            entry.Mark(None)
+        else:
+            self.entries[key] = entry
+            entry.Mark('selected')
+
+        self.Push()
+
+    def Add(self, entry):
+        self.entries[entry.UniqueKey()] = entry
+        self.Push()
+
+    def Push(self):
+        new_contents = [(ent.UniqueKeyItem(), ('pack', None)) for ent in self.entries.values()]
+        if not new_contents:
+            new_contents = [(urwid.Text(('selected_hint', "(Empty. Press <SPACE> on search results to select.)")), ('pack', None))]
+
+        self.contents = new_contents
+
 def SwitchFocus(key):
     pass
 
@@ -418,7 +485,10 @@ palette = [('search_label', 'yellow,bold', 'dark cyan'),
            ('db_status_loading', 'light red', 'default'),
            ('db_status_searching', 'yellow', 'default'),
 
+           ('mark_none', 'default', 'dark gray'),
+           ('mark_selected', 'light cyan', 'dark gray'),
            ('title', 'yellow', 'dark gray'),
+           ('title_delim', 'default', 'dark gray'),
            ('source', 'dark green', 'default'),
            ('author', 'white', 'default'),
            ('venue', 'underline', 'default'),
@@ -427,13 +497,19 @@ palette = [('search_label', 'yellow,bold', 'dark cyan'),
            ('bibkey', 'light green', 'default'),
 
            ('None+', 'default', 'dark magenta'),
+           ('mark_none+', 'default', 'light magenta'),
+           ('mark_selected+', 'light cyan', 'light magenta'),
            ('title+', 'yellow', 'light magenta'),
+           ('title_delim+', 'default', 'light magenta'),
            ('source+', 'light green', 'dark magenta'),
            ('author+', 'white', 'dark magenta'),
            ('venue+', 'white,underline', 'dark magenta'),
            ('year+', 'white', 'dark magenta'),
            ('delim+', 'default', 'dark magenta'),
            ('bibkey+', 'light green', 'dark magenta'),
+
+           ('selected_key', 'light cyan', 'default'),
+           ('selected_hint', 'dark cyan', 'default'),
 
            ('detail_key', 'light green', 'default'),
            ('detail_value', 'default', 'default'),
@@ -454,14 +530,14 @@ search_result_sink = SearchResultSink(result_panel)
 db_panel = urwid.Pile([repo.MakeStatusIndicator() for repo in bib_repos])
 
 details_panel = urwid.AttrMap(urwid.SolidFill(), 'details')
-picked_panel = urwid.AttrMap(urwid.Text("Selected:"), 'selected')
+picked_panel = urwid.AttrMap(PickedEntries(), 'picked')
 
 left_panel = result_panel
-right_panel = urwid.Pile([('pack', urwid.LineBox(db_panel)),
-                          ('weight', 5, urwid.LineBox(details_panel)),
-                          ('pack', urwid.LineBox(picked_panel))])
+right_panel = urwid.Pile([('pack', urwid.LineBox(db_panel, title="Database Info")),
+                          ('weight', 5, urwid.LineBox(details_panel, title="Detailed Info")),
+                          ('pack', urwid.LineBox(picked_panel, title="Selected Entries"))])
 
-main_widget = urwid.Columns([('weight', 2, urwid.LineBox(left_panel)),
+main_widget = urwid.Columns([('weight', 2, urwid.LineBox(left_panel, title="Search Results")),
                              ('weight', 1, right_panel)])
 
 top_widget = urwid.Pile([('pack', urwid.AttrMap(search_bar, 'search_content')),
@@ -484,6 +560,7 @@ urwid.connect_signal(search_bar, 'change', UpdateSearchPanel())
 
 for repo in bib_repos:
     repo.ConnectSink(search_result_sink)
+    repo.AttachPickedEntries(picked_panel)
 
 main_loop.widget = top_widget
 main_loop.run()
