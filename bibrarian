@@ -1,0 +1,5 @@
+#!/bin/sh
+
+SCRIPT_DIR="$(builtin cd "$(dirname "$0")"; builtin pwd)"
+
+python3 $SCRIPT_DIR/Bibrarian.py
