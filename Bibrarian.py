@@ -51,7 +51,7 @@ class BibEntry:
         def keypress(self, size, key):
             if key != ' ': return key
             details_panel.original_widget = self.entry.DetailsWidget()
-            picked_panel.original_widget.Toggle(self.entry)
+            selected_keys_panel.original_widget.Toggle(self.entry)
 
     def __init__(self, source):
         self.source = source
@@ -118,7 +118,7 @@ class BibEntry:
     def UniqueKeyItem(self):
         return urwid.Text([('selected_key', self.BibKey()), ('selected_hint', f"({self.Source()})")])
 
-class DblpBibEntry(BibEntry):
+class DblpEntry(BibEntry):
 
     class DetailsWidgetImpl(urwid.Pile):
 
@@ -178,7 +178,7 @@ class DblpBibEntry(BibEntry):
 
     def InitializeDetailsWidget(self):
         if self.details_widget is None:
-            self.details_widget = DblpBibEntry.DetailsWidgetImpl(self)
+            self.details_widget = DblpEntry.DetailsWidgetImpl(self)
 
     def DetailsWidget(self):
         self.InitializeDetailsWidget()
@@ -404,7 +404,7 @@ class BibRepo:
     def AttachPickedEntries(self, picked_entries):
         self.picked_entries = picked_entries
 
-class LocalBibRepo(BibRepo):
+class BibtexRepo(BibRepo):
     def __init__(self, glob_expr, event_loop):
         super().__init__(glob_expr, event_loop)
 
@@ -441,7 +441,7 @@ class LocalBibRepo(BibRepo):
             if entry.Match(keywords):
                 yield entry
 
-class DblpBibRepo(BibRepo):
+class DblpRepo(BibRepo):
     def __init__(self, event_loop):
         super().__init__("http://dblp.org", event_loop)
 
@@ -462,8 +462,8 @@ class DblpBibRepo(BibRepo):
             if 'hit' not in bib_data['result']['hits']:
                 return []
 
-            for raw_entry in bib_data['result']['hits']['hit']:
-                yield DblpBibEntry(raw_entry)
+            for entry in bib_data['result']['hits']['hit']:
+                yield DblpEntry(entry)
 
 class SearchResultsPanel(urwid.AttrMap):
     class ListWalkerModifiedHandler:
@@ -502,7 +502,7 @@ class SearchResultsPanel(urwid.AttrMap):
         urwid.connect_signal(new_list_walker, 'modified', SearchResultsPanel.ListWalkerModifiedHandler(new_list_walker))
         self.original_widget = urwid.ListBox(new_list_walker)
 
-class PickedEntries(urwid.Pile):
+class SelectedKeysPanel(urwid.Pile):
     def __init__(self, *args, **kwargs):
         super().__init__([], **kwargs)
         self.entries = {}
@@ -529,9 +529,6 @@ class PickedEntries(urwid.Pile):
             new_contents = [(urwid.Text(('selected_hint', "(Empty. Press <SPACE> on search results to select.)")), ('pack', None))]
 
         self.contents = new_contents
-
-def SwitchFocus(key):
-    pass
 
 logging.basicConfig(filename="log.txt",
                     format="[%(asctime)s %(levelname)7s] %(threadName)s: %(message)s",
@@ -575,26 +572,26 @@ palette = [('search_label', 'yellow,bold', 'dark cyan'),
            ('detail_key', 'light green', 'default'),
            ('detail_value', 'default', 'default'),
            ]
-main_loop = urwid.MainLoop(urwid.SolidFill(), palette, unhandled_input=SwitchFocus)
+main_loop = urwid.MainLoop(urwid.SolidFill(), palette)
 
 with open("config.json") as config_file:
     config = json.load(config_file)
 
-bib_repos = [DblpBibRepo(main_loop)] + [LocalBibRepo(bib, main_loop) for bib in config['bib_files']]
+bib_repos = [DblpRepo(main_loop)] + [BibtexRepo(bib, main_loop) for bib in config['bib_files']]
 
 search_bar = urwid.Edit(('search_label', "Search: "))
 message_bar = urwid.Text(('message_bar', "Message"))
 
 search_results_panel = SearchResultsPanel()
 
-db_panel = urwid.Pile([repo.StatusIndicatorWidget() for repo in bib_repos])
+db_status_panel = urwid.Pile([repo.StatusIndicatorWidget() for repo in bib_repos])
 
 details_panel = urwid.AttrMap(urwid.SolidFill(), 'details')
-picked_panel = urwid.AttrMap(PickedEntries(), 'picked')
+selected_keys_panel = urwid.AttrMap(SelectedKeysPanel(), 'picked')
 
-right_panel = urwid.Pile([('pack', urwid.LineBox(db_panel, title="Database Info")),
+right_panel = urwid.Pile([('pack', urwid.LineBox(db_status_panel, title="Database Info")),
                           ('weight', 5, urwid.LineBox(details_panel, title="Detailed Info")),
-                          ('pack', urwid.LineBox(picked_panel, title="Selected Entries"))])
+                          ('pack', urwid.LineBox(selected_keys_panel, title="Selected Entries"))])
 
 main_widget = urwid.Columns([('weight', 2, urwid.LineBox(search_results_panel, title="Search Results")),
                              ('weight', 1, right_panel)])
@@ -619,7 +616,7 @@ urwid.connect_signal(search_bar, 'change', UpdateSearchPanel())
 
 for repo in bib_repos:
     repo.ConnectSink(search_results_panel)
-    repo.AttachPickedEntries(picked_panel)
+    repo.AttachPickedEntries(selected_keys_panel)
 
 main_loop.widget = top_widget
 main_loop.run()
