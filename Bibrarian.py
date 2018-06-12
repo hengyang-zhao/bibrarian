@@ -17,17 +17,53 @@ import pybtex
 import pybtex.database
 
 class BibEntry:
+    class SearchPanelWidgetImpl(urwid.AttrMap):
+        def __init__(self, entry):
+            super().__init__(urwid.SolidFill(), None)
+            self.entry = entry
+
+            self.title = urwid.AttrMap(urwid.Text(entry.Title()), 'title')
+            self.info = urwid.Text([('author', f"{entry.AbbrevAuthors()}"),
+                                    ('delim', ". "),
+                                    ('venue', f"{entry.Venue()}"),
+                                    ('delim', ", "),
+                                    ('year', f"{entry.Year()}"),
+                                    ('delim', ".")])
+            self.mark = urwid.AttrMap(urwid.Text(('mark_none', "[M]"), align='right'), None)
+            self.source = urwid.Text([('source', f"{entry.Source()}"),
+                                      ('delim', "::"),
+                                      ('bibkey', f"{entry.BibKey()}")])
+
+            self.original_widget = urwid.Pile([
+                urwid.AttrMap(urwid.Columns([('weight', 1, self.title),
+                                             ('pack', self.mark)],
+                                            dividechars=1),
+                              'title'),
+                self.info, self.source])
+
+            self.set_focus_map({palette_key: str(palette_key) + '+' for palette_key in [
+                'title', 'author', 'delim', 'venue', 'year', 'source',
+                'bibkey', 'mark_none', 'mark_selected', 'title_delim', None]})
+
+        def selectable(self):
+            return True
+
+        def keypress(self, size, key):
+            if key != ' ': return key
+            details_panel.original_widget = self.entry.DetailsWidget()
+            picked_panel.original_widget.Toggle(self.entry)
+
     def __init__(self, source):
         self.source = source
+        self.search_panel_widget = None
         self.mark = None
-        self.mark_widget = urwid.AttrMap(urwid.Text(('mark_none', "[M]"), align='right'), None)
 
     def Authors(self): return NotImplemented
     def Title(self): return NotImplemented
     def Year(self): return NotImplemented
     def Venue(self): return NotImplemented
     def BibKey(self): return NotImplemented
-    def MakeDetailPage(self): return NotImplemented
+    def DetailsWidget(self): return NotImplemented
 
     def AbbrevAuthors(self):
         authors = self.Authors()
@@ -57,54 +93,24 @@ class BibEntry:
 
         return not trivial
 
-    def MakeSelectableEntry(self):
-        class SearchCandidate(urwid.Pile):
-            def __init__(self, entry, *args, **argv):
-                super().__init__(*args, **argv)
-                self.entry = entry
-
-            def selectable(self):
-                return True
-
-            def keypress(self, size, key):
-                if key != ' ': return key
-                details_panel.original_widget = self.entry.MakeDetailPage()
-                picked_panel.original_widget.Toggle(self.entry)
-
-        title = urwid.AttrMap(urwid.Text(self.Title()), 'title')
-        info = urwid.Text([('author', f"{self.AbbrevAuthors()}"),
-                           ('delim', ". "),
-                           ('venue', f"{self.Venue()}"),
-                           ('delim', ", "),
-                           ('year', f"{self.Year()}"),
-                           ('delim', ".")])
-        source = urwid.Text([('source', f"{self.Source()}"),
-                             ('delim', "::"),
-                             ('bibkey', f"{self.BibKey()}")])
-
-        pile = SearchCandidate(self, [urwid.AttrMap(urwid.Columns([('weight', 1, title),
-                                                                   ('pack', self.mark_widget)],
-                                                                  dividechars=1), 'title'),
-                                      info, source])
-
-        return urwid.AttrMap(pile, None, {palette_key: str(palette_key) + '+'
-                             for palette_key in ['title', 'author', 'delim',
-                                                 'venue', 'year', 'source',
-                                                 'bibkey', 'mark_none',
-                                                 'mark_selected',
-                                                 'title_delim', None]})
+    def SearchPanelWidget(self):
+        self.InitializeSearchPanelWidget()
+        return self.search_panel_widget
 
     def Mark(self, mark):
+        self.InitializeSearchPanelWidget()
         if mark is None:
-            self.mark_widget.original_widget.set_text([('title_delim', "["),
-                                                       ('mark_none', " "),
-                                                       ('title_delim', "]")])
+            self.search_panel_widget.mark.original_widget.set_text(
+                    [('title_delim', "["), ('mark_none', " "), ('title_delim', "]")])
         elif mark == 'selected':
-            self.mark_widget.original_widget.set_text([('title_delim', "["),
-                                                       ('mark_selected', "X"),
-                                                       ('title_delim', "]")])
+            self.search_panel_widget.mark.original_widget.set_text(
+                    [('title_delim', "["), ('mark_selected', "X"), ('title_delim', "]")])
         else:
             raise ValueError(f"Invalid mark: {mark}")
+
+    def InitializeSearchPanelWidget(self):
+        if self.search_panel_widget is None:
+            self.search_panel_widget = BibEntry.SearchPanelWidgetImpl(self)
 
     def UniqueKey(self):
         return f"{self.Source()}::{self.BibKey()}"
@@ -113,9 +119,40 @@ class BibEntry:
         return urwid.Text([('selected_key', self.BibKey()), ('selected_hint', f"({self.Source()})")])
 
 class DblpBibEntry(BibEntry):
+
+    class DetailsWidgetImpl(urwid.Pile):
+
+        def __init__(self, entry):
+            super().__init__([])
+
+            self.entry = entry
+
+            self.key_item = urwid.Columns([('pack', urwid.Text(('detail_key', "citation key: "))),
+                                           ('weight', 1, urwid.Text(('detail_value', entry.BibKey())))])
+            self.source_item = urwid.Columns([('pack', urwid.Text(('detail_key', "source: "))),
+                                              ('weight', 1, urwid.Text(('detail_value', entry.Source())))])
+            self.person_items = urwid.Pile([
+                urwid.Columns([('pack', urwid.Text(('detail_key', f"{k.lower()}: "))),
+                               ('weight', 1, urwid.Text(('detail_value', '\n'.join(entry.data['info']['authors'][k]))))])
+                for k in entry.data['info']['authors'].keys()
+                ])
+
+            self.info_items = urwid.Pile([
+                urwid.Columns([('pack', urwid.Text(('detail_key', f"{k.lower()}: "))),
+                               ('weight', 1, urwid.Text(('detail_value', f"{entry.data['info'][k]}")))])
+                for k in entry.data['info'].keys() if k != 'authors'
+                ])
+
+            self.contents = [(self.key_item, ('pack', None)),
+                             (self.source_item, ('pack', None)),
+                             (self.person_items, ('pack', None)),
+                             (self.info_items, ('pack', None)),
+                             (urwid.SolidFill(), ('weight', 1))]
+
     def __init__(self, dblp_entry):
         super().__init__('dblp.org')
         self.data = dblp_entry
+        self.details_widget = None
 
     def Authors(self):
         try:
@@ -139,33 +176,58 @@ class DblpBibEntry(BibEntry):
     def BibKey(self):
         return self.data['info']['key'].split('/')[-1]
 
-    def MakeDetailPage(self):
-        key_item = urwid.Columns([('pack', urwid.Text(('detail_key', "citation key: "))),
-                                  ('weight', 1, urwid.Text(('detail_value', self.BibKey())))])
-        source_item = urwid.Columns([('pack', urwid.Text(('detail_key', "source: "))),
-                                     ('weight', 1, urwid.Text(('detail_value', self.Source())))])
-        person_items = urwid.Pile([
-            urwid.Columns([('pack', urwid.Text(('detail_key', f"{k.lower()}: "))),
-                           ('weight', 1, urwid.Text(('detail_value', '\n'.join(self.data['info']['authors'][k]))))])
-            for k in self.data['info']['authors'].keys()
-            ])
-        info_items = urwid.Pile([
-            urwid.Columns([('pack', urwid.Text(('detail_key', f"{k.lower()}: "))),
-                           ('weight', 1, urwid.Text(('detail_value', f"{self.data['info'][k]}")))])
-            for k in self.data['info'].keys() if k != 'authors'
-            ])
+    def InitializeDetailsWidget(self):
+        if self.details_widget is None:
+            self.details_widget = DblpBibEntry.DetailsWidgetImpl(self)
 
-        return urwid.Pile([('pack', key_item),
-                           ('pack', source_item),
-                           ('pack', person_items),
-                           ('pack', info_items),
-                           ('weight', 1, urwid.SolidFill())])
+    def DetailsWidget(self):
+        self.InitializeDetailsWidget()
+        return self.details_widget
 
 class BibtexEntry(BibEntry):
+
+    class DetailsWidgetImpl(urwid.Pile):
+
+        def __init__(self, entry):
+            super().__init__([])
+
+            self.entry = entry
+            self.key = urwid.Columns([
+                ('pack', urwid.Text(('detail_key', "citation key: "))),
+                ('weight', 1, urwid.Text(('detail_value', entry.BibKey())))])
+
+            self.source = urwid.Columns([
+                ('pack', urwid.Text(('detail_key', "source: "))),
+                ('weight', 1, urwid.Text(('detail_value', entry.Source())))])
+
+            self.item_type = urwid.Columns([
+                ('pack', urwid.Text(('detail_key', "type: "))),
+                ('weight', 1, urwid.Text(('detail_value', entry.entry.type)))])
+
+            self.persons = urwid.Pile([
+                urwid.Columns([('pack', urwid.Text(('detail_key', f"{k.lower()}: "))),
+                               ('weight', 1, urwid.Text(('detail_value', '\n'.join([str(p) for p in entry.entry.persons[k]]))))])
+                for k in entry.entry.persons.keys()
+                ])
+
+            self.info = urwid.Pile([
+                urwid.Columns([('pack', urwid.Text(('detail_key', f"{k.lower()}: "))),
+                               ('weight', 1, urwid.Text(('detail_value', f"{entry.entry.fields[k]}")))])
+                for k in entry.entry.fields.keys() if entry.entry.fields[k]
+                ])
+
+            self.contents = [(self.key, ('pack', None)),
+                             (self.source, ('pack', None)),
+                             (self.item_type, ('pack', None)),
+                             (self.persons, ('pack', None)),
+                             (self.info, ('pack', None)),
+                             (urwid.SolidFill(), ('weight', 1))]
+
     def __init__(self, key, entry, source):
         super().__init__(source)
         self.key = key
         self.entry = entry
+        self.details_widget = None
 
     def Authors(self):
         try: return [str(au) for au in self.entry.persons['author']]
@@ -192,30 +254,13 @@ class BibtexEntry(BibEntry):
     def BibKey(self):
         return self.key
 
-    def MakeDetailPage(self):
-        key_item = urwid.Columns([('pack', urwid.Text(('detail_key', "citation key: "))),
-                                  ('weight', 1, urwid.Text(('detail_value', self.BibKey())))])
-        source_item = urwid.Columns([('pack', urwid.Text(('detail_key', "source: "))),
-                                     ('weight', 1, urwid.Text(('detail_value', self.Source())))])
-        type_item = urwid.Columns([('pack', urwid.Text(('detail_key', "type: "))),
-                                   ('weight', 1, urwid.Text(('detail_value', self.entry.type)))])
-        person_items = urwid.Pile([
-            urwid.Columns([('pack', urwid.Text(('detail_key', f"{k.lower()}: "))),
-                           ('weight', 1, urwid.Text(('detail_value', '\n'.join([str(p) for p in self.entry.persons[k]]))))])
-            for k in self.entry.persons.keys()
-            ])
-        misc_items = urwid.Pile([
-            urwid.Columns([('pack', urwid.Text(('detail_key', f"{k.lower()}: "))),
-                           ('weight', 1, urwid.Text(('detail_value', f"{self.entry.fields[k]}")))])
-            for k in self.entry.fields.keys() if self.entry.fields[k]
-            ])
+    def InitializeDetailsWidget(self):
+        if self.details_widget is None:
+            self.details_widget = BibtexEntry.DetailsWidgetImpl(self)
 
-        return urwid.Pile([('pack', key_item),
-                           ('pack', source_item),
-                           ('pack', type_item),
-                           ('pack', person_items),
-                           ('pack', misc_items),
-                           ('weight', 1, urwid.SolidFill())])
+    def DetailsWidget(self):
+        self.InitializeDetailsWidget()
+        return self.details_widget
 
 class BibRepo:
 
@@ -404,7 +449,7 @@ class DblpBibRepo(BibRepo):
             for raw_entry in bib_data['result']['hits']['hit']:
                 yield DblpBibEntry(raw_entry)
 
-class SearchResultSink:
+class SearchResultsPanel(urwid.AttrMap):
     class ListWalkerModifiedHandler:
         def __init__(self, widget):
             self.widget = widget
@@ -414,8 +459,8 @@ class SearchResultSink:
             message_bar.set_text(f"Modified: {self.counter}.")
             self.counter += 1
 
-    def __init__(self, box_widget):
-        self.parent = box_widget
+    def __init__(self):
+        super().__init__(urwid.SolidFill(), None)
         self.serial = 0
         self.serial_lock = threading.Lock()
         self.picked_pool = None
@@ -433,13 +478,13 @@ class SearchResultSink:
     def Add(self, entry, serial):
         with self.serial_lock:
             if self.serial == serial:
-                self.items.append(entry.MakeSelectableEntry())
+                self.items.append(entry.SearchPanelWidget())
                 self.Push()
 
     def Push(self):
         new_list_walker = urwid.SimpleListWalker(self.items)
-        urwid.connect_signal(new_list_walker, 'modified', SearchResultSink.ListWalkerModifiedHandler(new_list_walker))
-        self.parent.original_widget = urwid.ListBox(new_list_walker)
+        urwid.connect_signal(new_list_walker, 'modified', SearchResultsPanel.ListWalkerModifiedHandler(new_list_walker))
+        self.original_widget = urwid.ListBox(new_list_walker)
 
 class PickedEntries(urwid.Pile):
     def __init__(self, *args, **kwargs):
@@ -524,20 +569,18 @@ bib_repos = [DblpBibRepo(main_loop)] + [LocalBibRepo(bib, main_loop) for bib in 
 search_bar = urwid.Edit(('search_label', "Search: "))
 message_bar = urwid.Text(('message_bar', "Message"))
 
-result_panel = urwid.AttrMap(urwid.SolidFill(), None)
-search_result_sink = SearchResultSink(result_panel)
+search_results_panel = SearchResultsPanel()
 
 db_panel = urwid.Pile([repo.MakeStatusIndicator() for repo in bib_repos])
 
 details_panel = urwid.AttrMap(urwid.SolidFill(), 'details')
 picked_panel = urwid.AttrMap(PickedEntries(), 'picked')
 
-left_panel = result_panel
 right_panel = urwid.Pile([('pack', urwid.LineBox(db_panel, title="Database Info")),
                           ('weight', 5, urwid.LineBox(details_panel, title="Detailed Info")),
                           ('pack', urwid.LineBox(picked_panel, title="Selected Entries"))])
 
-main_widget = urwid.Columns([('weight', 2, urwid.LineBox(left_panel, title="Search Results")),
+main_widget = urwid.Columns([('weight', 2, urwid.LineBox(search_results_panel, title="Search Results")),
                              ('weight', 1, right_panel)])
 
 top_widget = urwid.Pile([('pack', urwid.AttrMap(search_bar, 'search_content')),
@@ -550,7 +593,7 @@ class UpdateSearchPanel:
 
     def __call__(self, edit, text):
         message_bar.set_text(f"Got '{text}'.")
-        search_result_sink.SetSerial(self.serial)
+        search_results_panel.SetSerial(self.serial)
         for repo in bib_repos:
             repo.Search(text, self.serial)
 
@@ -559,7 +602,7 @@ class UpdateSearchPanel:
 urwid.connect_signal(search_bar, 'change', UpdateSearchPanel())
 
 for repo in bib_repos:
-    repo.ConnectSink(search_result_sink)
+    repo.ConnectSink(search_results_panel)
     repo.AttachPickedEntries(picked_panel)
 
 main_loop.widget = top_widget
