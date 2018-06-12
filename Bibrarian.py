@@ -266,6 +266,34 @@ class BibRepo:
 
     REDRAW_LOCK = threading.Lock()
 
+    class StatusIndicatorWidgetImpl(urwid.AttrMap):
+        def __init__(self, repo):
+            super().__init__(urwid.SolidFill(), None)
+            self.repo = repo
+
+            self.label = urwid.AttrMap(urwid.Text(f"{repo.source}"), "db_label")
+            self.status = urwid.AttrMap(urwid.Text(""), "db_label")
+
+            self.original_widget = urwid.Columns([('weight', 1, self.label),
+                                                  ('pack', self.status)])
+
+        def UpdateStatus(self, status):
+            with BibRepo.REDRAW_LOCK:
+                if self.repo.status == 'initialized':
+                    self.status.original_widget.set_text("initialized")
+                elif self.repo.status == 'loading':
+                    self.status.set_attr_map({None: "db_status_loading"})
+                    self.status.original_widget.set_text("loading")
+                elif self.repo.status == 'searching':
+                    self.status.set_attr_map({None: "db_status_searching"})
+                    self.status.original_widget.set_text("searching")
+                elif self.repo.status == 'ready':
+                    self.status.set_attr_map({None: "db_status_ready"})
+                    self.status.original_widget.set_text("ready")
+                    logging.debug(self.status)
+                else:
+                    raise LookupError(f"Invalid status: {status}")
+
     def __init__(self, source, event_loop):
         self.source = source
         self.event_loop = event_loop
@@ -274,9 +302,6 @@ class BibRepo:
         self.serial_lock = threading.Lock()
 
         self.search_result_sinks = []
-
-        self.status_indicator_left = urwid.AttrMap(urwid.Text(f"{self.source}"), "db_label")
-        self.status_indicator_right = urwid.AttrMap(urwid.Text(""), "db_label")
 
         self.loading_done = threading.Event()
         self.loading_done.clear()
@@ -292,6 +317,7 @@ class BibRepo:
                                                  target=self.SearchingThreadWrapper,
                                                  daemon=True)
         self.picked_entries = None
+        self.status_indicator_widget = None
 
         self.SetStatus("initialized")
         self.loading_thread.start()
@@ -306,28 +332,18 @@ class BibRepo:
     def ConnectSink(self, sink):
         self.search_result_sinks.append(sink)
 
-    def MakeStatusIndicator(self):
-
-        return urwid.Columns([self.status_indicator_left,
-                              ('pack', self.status_indicator_right)],
-                             dividechars=1)
-
     def SetStatus(self, status):
-        with BibRepo.REDRAW_LOCK:
-            if status == 'initialized':
-                self.status_indicator_right.original_widget.set_text("initialized")
-            elif status == 'loading':
-                self.status_indicator_right.set_attr_map({None: "db_status_loading"})
-                self.status_indicator_right.original_widget.set_text("loading")
-            elif status == 'searching':
-                self.status_indicator_right.set_attr_map({None: "db_status_searching"})
-                self.status_indicator_right.original_widget.set_text("searching")
-            elif status == 'ready':
-                self.status_indicator_right.set_attr_map({None: "db_status_ready"})
-                self.status_indicator_right.original_widget.set_text("ready")
-                logging.debug(self.status_indicator_right)
-            else:
-                raise LookupError(f"Invalid status: {status}")
+        self.status = status
+        self.InitializeStatusIndicatorWidget()
+        self.status_indicator_widget.UpdateStatus(status)
+
+    def InitializeStatusIndicatorWidget(self):
+        if self.status_indicator_widget is None:
+            self.status_indicator_widget = BibRepo.StatusIndicatorWidgetImpl(self)
+
+    def StatusIndicatorWidget(self):
+        self.InitializeStatusIndicatorWidget()
+        return self.status_indicator_widget
 
     def LoadingThreadWrapper(self):
 
@@ -571,7 +587,7 @@ message_bar = urwid.Text(('message_bar', "Message"))
 
 search_results_panel = SearchResultsPanel()
 
-db_panel = urwid.Pile([repo.MakeStatusIndicator() for repo in bib_repos])
+db_panel = urwid.Pile([repo.StatusIndicatorWidget() for repo in bib_repos])
 
 details_panel = urwid.AttrMap(urwid.SolidFill(), 'details')
 picked_panel = urwid.AttrMap(PickedEntries(), 'picked')
