@@ -51,7 +51,7 @@ class BibEntry:
         def keypress(self, size, key):
             if key != ' ': return key
             details_panel.original_widget = self.entry.DetailsWidget()
-            selected_keys_panel.original_widget.Toggle(self.entry)
+            selected_keys_panel.Toggle(self.entry)
 
     def __init__(self, source):
         self.source = source
@@ -63,6 +63,9 @@ class BibEntry:
     def Year(self): return NotImplemented
     def Venue(self): return NotImplemented
     def BibKey(self): return NotImplemented
+
+    def ToPybEntry(self): return NotImplemented
+
     def DetailsWidget(self): return NotImplemented
 
     def AbbrevAuthors(self):
@@ -254,6 +257,9 @@ class BibtexEntry(BibEntry):
     def BibKey(self):
         return self.key
 
+    def ToPybEntry(self):
+        return self.entry
+
     def InitializeDetailsWidget(self):
         if self.details_widget is None:
             self.details_widget = BibtexEntry.DetailsWidgetImpl(self)
@@ -316,7 +322,7 @@ class BibRepo:
         self.searching_thread = threading.Thread(name=f"search-{self.source}",
                                                  target=self.SearchingThreadWrapper,
                                                  daemon=True)
-        self.picked_entries = None
+        self.selected_entries_panel = None
         self.status_indicator_widget = None
 
         self.SetStatus("initialized")
@@ -329,7 +335,7 @@ class BibRepo:
             self.serial = serial
         self.searching_done.set()
 
-    def ConnectSink(self, sink):
+    def AttachSink(self, sink):
         self.search_result_sinks.append(sink)
 
     def SetStatus(self, status):
@@ -376,7 +382,7 @@ class BibRepo:
             try:
                 for item in self.SearchingThreadMain(self.search_text):
 
-                    if item.BibKey() in self.picked_entries.original_widget.entries.keys():
+                    if item.BibKey() in self.selected_entries_panel.entries.keys():
                         item.Mark('selected')
                     else:
                         item.Mark(None)
@@ -401,21 +407,25 @@ class BibRepo:
                 self.event_loop.draw_screen()
             except: pass
 
-    def AttachPickedEntries(self, picked_entries):
-        self.picked_entries = picked_entries
+    def AttachPickedEntries(self, selected_entries_panel):
+        self.selected_entries_panel = selected_entries_panel
 
 class BibtexRepo(BibRepo):
     def __init__(self, glob_expr, event_loop):
         super().__init__(glob_expr, event_loop)
+        self.bib_files = []
 
     def LoadingThreadMain(self):
-        has_match = False
         glob_expr = self.source
         logging.debug(f"Collecting entries from glob expression '{glob_expr}'")
 
         self.bib_entries = []
-        for path in glob.glob(glob_expr, recursive=True):
-            has_match = True
+        self.bib_files = glob.glob(glob_expr, recursive=True)
+
+        if not self.bib_entries:
+            logging.warning(f"Glob expr '{glob_expr}' matches no target")
+
+        for path in self.bib_files:
 
             try:
                 bib_data = pybtex.database.parse_file(path)
@@ -428,9 +438,6 @@ class BibtexRepo(BibRepo):
 
             logging.debug(f"Parsed {len(bib_data.entries)} entries from file {path}")
 
-        if not has_match:
-            logging.warning(f"Glob expr '{glob_expr}' matches no target")
-
     def SearchingThreadMain(self, search_text):
         stripped = search_text.strip()
         if not stripped:
@@ -440,6 +447,31 @@ class BibtexRepo(BibRepo):
         for entry in self.bib_entries:
             if entry.Match(keywords):
                 yield entry
+
+class OutputBibtexRepo(BibtexRepo):
+    def __init__(self, glob_expr, event_loop):
+        super().__init__(glob_expr, event_loop)
+        self.selected_keys_panel = None
+
+        if len(self.bib_files) > 1:
+            raise ValueError(f"Glob expr '{glob_expr}' matches more than one file")
+
+        self.output_file = self.bib_files[0] if self.bib_files else glob_expr
+
+    def AttachSelectedKeys(self, selected_keys_panel):
+        self.selected_keys_panel = selected_keys_panel
+
+    def Write(self):
+        if self.selected_keys_panel is None:
+            return
+
+        self.loading_done.wait()
+
+        entries = {e.BibKey(): e.ToPybEntry() for e in self.bib_entries}
+        entries.update({e.BibKey(): e.ToPybEntry() for e in selected_keys_panel.entries.values()})
+
+        pybtex.database.BibliographyData(entries).to_file(self.output_file)
+        logging.info(f"Wrote to file '{self.output_file}'")
 
 class DblpRepo(BibRepo):
     def __init__(self, event_loop):
@@ -484,7 +516,7 @@ class SearchResultsPanel(urwid.AttrMap):
 
     def Clear(self):
         self.items = []
-        self.Push()
+        self.SyncDisplay()
 
     def SetSerial(self, serial):
         with self.serial_lock:
@@ -495,9 +527,9 @@ class SearchResultsPanel(urwid.AttrMap):
         with self.serial_lock:
             if self.serial == serial:
                 self.items.append(entry.SearchPanelWidget())
-                self.Push()
+                self.SyncDisplay()
 
-    def Push(self):
+    def SyncDisplay(self):
         new_list_walker = urwid.SimpleListWalker(self.items)
         urwid.connect_signal(new_list_walker, 'modified', SearchResultsPanel.ListWalkerModifiedHandler(new_list_walker))
         self.original_widget = urwid.ListBox(new_list_walker)
@@ -506,7 +538,7 @@ class SelectedKeysPanel(urwid.Pile):
     def __init__(self, *args, **kwargs):
         super().__init__([], **kwargs)
         self.entries = {}
-        self.Push()
+        self.SyncDisplay()
 
     def Toggle(self, entry):
         key = entry.UniqueKey()
@@ -517,13 +549,13 @@ class SelectedKeysPanel(urwid.Pile):
             self.entries[key] = entry
             entry.Mark('selected')
 
-        self.Push()
+        self.SyncDisplay()
 
     def Add(self, entry):
         self.entries[entry.UniqueKey()] = entry
-        self.Push()
+        self.SyncDisplay()
 
-    def Push(self):
+    def SyncDisplay(self):
         new_contents = [(ent.UniqueKeyItem(), ('pack', None)) for ent in self.entries.values()]
         if not new_contents:
             new_contents = [(urwid.Text(('selected_hint', "(Empty. Press <SPACE> on search results to select.)")), ('pack', None))]
@@ -572,12 +604,26 @@ palette = [('search_label', 'yellow,bold', 'dark cyan'),
            ('detail_key', 'light green', 'default'),
            ('detail_value', 'default', 'default'),
            ]
-main_loop = urwid.MainLoop(urwid.SolidFill(), palette)
+
+def InputHandler(key):
+    if key == 'ctrl w':
+        try: output_repo.Write()
+        except:
+            logging.error(traceback.format_exc())
+        raise urwid.ExitMainLoop()
+
+main_loop = urwid.MainLoop(urwid.SolidFill(),
+                           palette=palette,
+                           unhandled_input=InputHandler)
 
 with open("config.json") as config_file:
     config = json.load(config_file)
 
-bib_repos = [DblpRepo(main_loop)] + [BibtexRepo(bib, main_loop) for bib in config['bib_files']]
+output_repo = OutputBibtexRepo(config['bib_output'], main_loop)
+
+bib_repos = [DblpRepo(main_loop)] \
+          + [BibtexRepo(bib, main_loop) for bib in config['bib_files']] \
+          + [output_repo]
 
 search_bar = urwid.Edit(('search_label', "Search: "))
 message_bar = urwid.Text(('message_bar', "Message"))
@@ -587,7 +633,9 @@ search_results_panel = SearchResultsPanel()
 db_status_panel = urwid.Pile([repo.StatusIndicatorWidget() for repo in bib_repos])
 
 details_panel = urwid.AttrMap(urwid.SolidFill(), 'details')
-selected_keys_panel = urwid.AttrMap(SelectedKeysPanel(), 'picked')
+selected_keys_panel = SelectedKeysPanel()
+
+output_repo.AttachSelectedKeys(selected_keys_panel)
 
 right_panel = urwid.Pile([('pack', urwid.LineBox(db_status_panel, title="Database Info")),
                           ('weight', 5, urwid.LineBox(details_panel, title="Detailed Info")),
@@ -615,7 +663,7 @@ class UpdateSearchPanel:
 urwid.connect_signal(search_bar, 'change', UpdateSearchPanel())
 
 for repo in bib_repos:
-    repo.ConnectSink(search_results_panel)
+    repo.AttachSink(search_results_panel)
     repo.AttachPickedEntries(selected_keys_panel)
 
 main_loop.widget = top_widget
