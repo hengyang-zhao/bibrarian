@@ -569,6 +569,8 @@ logging.basicConfig(filename="log.txt",
 
 palette = [('search_label', 'yellow,bold', 'dark cyan'),
            ('search_content', 'white', 'dark cyan'),
+           ('search_hint', 'light cyan', 'dark cyan'),
+
            ('message_bar', 'white', 'dark gray'),
            ('db_label', 'default', 'default'),
            ('db_status_ready', 'light green', 'default'),
@@ -605,6 +607,39 @@ palette = [('search_label', 'yellow,bold', 'dark cyan'),
            ('detail_value', 'default', 'default'),
            ]
 
+class SearchBar(urwid.AttrMap):
+    def __init__(self):
+        super().__init__(urwid.SolidFill(), 'search_content')
+
+        self.search = urwid.Edit(('search_label', " Search: "))
+        self.hint = urwid.Text(('search_hint', "Type keywords to search"), align='right')
+
+        self.original_widget = urwid.Columns([('pack', self.search),
+                                              ('weight', 1, self.hint)])
+
+        self.search_panel = None
+        self.search_serial = 0
+        self.bib_repos = []
+
+    def TextChangeHandler(self, edit, text):
+        search_results_panel.SetSerial(self.search_serial)
+        for repo in self.bib_repos:
+            repo.Search(text, self.search_serial)
+
+        self.search_serial += 1
+
+        if text == '':
+            self.hint.set_text(('search_hint', "Type keywords to search"))
+        else:
+            self.hint.set_text(('search_hint', ""))
+
+    def SetActiveRepos(self, repos):
+        self.bib_repos = repos
+
+    def AttachSearchPanel(self, search_panel):
+        self.search_panel = search_panel
+        urwid.connect_signal(self.search, 'change', self.TextChangeHandler)
+
 def InputHandler(key):
     if key == 'ctrl w':
         try: output_repo.Write()
@@ -624,11 +659,13 @@ output_repo = OutputBibtexRepo(config['bib_output'], main_loop)
 bib_repos = [DblpRepo(main_loop)] \
           + [BibtexRepo(bib, main_loop) for bib in config['bib_files']] \
           + [output_repo]
-
-search_bar = urwid.Edit(('search_label', "Search: "))
 message_bar = urwid.Text(('message_bar', "Message"))
 
 search_results_panel = SearchResultsPanel()
+
+search_bar = SearchBar()
+search_bar.SetActiveRepos(bib_repos)
+search_bar.AttachSearchPanel(search_results_panel)
 
 db_status_panel = urwid.Pile([repo.StatusIndicatorWidget() for repo in bib_repos])
 
@@ -644,23 +681,9 @@ right_panel = urwid.Pile([('pack', urwid.LineBox(db_status_panel, title="Databas
 main_widget = urwid.Columns([('weight', 2, urwid.LineBox(search_results_panel, title="Search Results")),
                              ('weight', 1, right_panel)])
 
-top_widget = urwid.Pile([('pack', urwid.AttrMap(search_bar, 'search_content')),
+top_widget = urwid.Pile([('pack', search_bar),
                          ('weight', 1, main_widget),
                          ('pack', urwid.AttrMap(message_bar, 'message_bar'))])
-
-class UpdateSearchPanel:
-    def __init__(self):
-        self.serial = 0
-
-    def __call__(self, edit, text):
-        message_bar.set_text(f"Got '{text}'.")
-        search_results_panel.SetSerial(self.serial)
-        for repo in bib_repos:
-            repo.Search(text, self.serial)
-
-        self.serial += 1
-
-urwid.connect_signal(search_bar, 'change', UpdateSearchPanel())
 
 for repo in bib_repos:
     repo.AttachSink(search_results_panel)
