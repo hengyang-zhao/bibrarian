@@ -6,6 +6,7 @@ import time
 import logging
 import threading
 import traceback
+import itertools
 
 import urllib
 import urllib.request
@@ -53,7 +54,8 @@ class BibEntry:
             details_panel.original_widget = self.entry.DetailsWidget()
             selected_keys_panel.Toggle(self.entry)
 
-    def __init__(self, source):
+    def __init__(self, source, repo):
+        self.repo = repo
         self.source = source
         self.search_panel_widget = None
         self.mark = None
@@ -152,8 +154,8 @@ class DblpEntry(BibEntry):
                              (self.info_items, ('pack', None)),
                              (urwid.SolidFill(), ('weight', 1))]
 
-    def __init__(self, dblp_entry):
-        super().__init__('dblp.org')
+    def __init__(self, dblp_entry, repo):
+        super().__init__('dblp.org', repo)
         self.data = dblp_entry
         self.details_widget = None
 
@@ -226,10 +228,11 @@ class BibtexEntry(BibEntry):
                              (self.info, ('pack', None)),
                              (urwid.SolidFill(), ('weight', 1))]
 
-    def __init__(self, key, entry, source):
-        super().__init__(source)
+    def __init__(self, key, entry, repo, source):
+        super().__init__(source, repo)
         self.key = key
         self.entry = entry
+        self.repo = repo
         self.details_widget = None
 
     def Authors(self):
@@ -280,9 +283,12 @@ class BibRepo:
             self.label = urwid.AttrMap(urwid.Text(f"{repo.source}"), "db_label")
             self.status = urwid.AttrMap(urwid.Text(""), "db_label")
 
-            self.original_widget = urwid.Columns([('weight', 1, self.label),
-                                                  ('pack', self.status)])
-
+            self.original_widget = urwid.Columns([('pack', self.repo._short_label),
+                                                  ('pack', self.repo.enabled_mark),
+                                                  ('weight', 1, self.label),
+                                                  ('pack', self.status),
+                                                  ('pack', self.repo.extra_info)],
+                                                 dividechars=1)
         def UpdateStatus(self, status):
             with BibRepo.REDRAW_LOCK:
                 if self.repo.status == 'initialized':
@@ -322,12 +328,38 @@ class BibRepo:
         self.searching_thread = threading.Thread(name=f"search-{self.source}",
                                                  target=self.SearchingThreadWrapper,
                                                  daemon=True)
+        self._short_label = urwid.Text("?")
+
         self.selected_entries_panel = None
         self.status_indicator_widget = None
+
+        self.enabled = True
+        self.enabled_mark = urwid.Text("")
+        self.SetEnabled(True)
+
+        self.extra_info = urwid.Text(('db_ro', "ro"))
 
         self.SetStatus("initialized")
         self.loading_thread.start()
         self.searching_thread.start()
+
+    @property
+    def short_label(self):
+        return self._short_label.get_text()
+
+    @short_label.setter
+    def short_label(self, value):
+        self._short_label.set_text(value)
+
+    def Enabled(self):
+        return self.enabled
+
+    def SetEnabled(self, enabled):
+        self.enabled = enabled
+        if enabled:
+            self.enabled_mark.set_text(["[", ('db_enabled', "X"), "]"])
+        else:
+            self.enabled_mark.set_text("[ ]")
 
     def Search(self, search_text, serial):
         self.search_text = search_text
@@ -434,7 +466,7 @@ class BibtexRepo(BibRepo):
                 continue
 
             for key, entry in bib_data.entries.iteritems():
-                self.bib_entries.append(BibtexEntry(key, entry, path))
+                self.bib_entries.append(BibtexEntry(key, entry, self, path))
 
             logging.debug(f"Parsed {len(bib_data.entries)} entries from file {path}")
 
@@ -456,6 +488,7 @@ class OutputBibtexRepo(BibtexRepo):
         if len(self.bib_files) > 1:
             raise ValueError(f"Glob expr '{glob_expr}' matches more than one file")
 
+        self.extra_info.set_text(('db_rw', "rw"))
         self.output_file = self.bib_files[0] if self.bib_files else glob_expr
 
     def AttachSelectedKeys(self, selected_keys_panel):
@@ -495,7 +528,7 @@ class DblpRepo(BibRepo):
                 return []
 
             for entry in bib_data['result']['hits']['hit']:
-                yield DblpEntry(entry)
+                yield DblpEntry(entry, self)
 
 class SearchResultsPanel(urwid.AttrMap):
     class ListWalkerModifiedHandler:
@@ -530,7 +563,8 @@ class SearchResultsPanel(urwid.AttrMap):
                 self.SyncDisplay()
 
     def SyncDisplay(self):
-        new_list_walker = urwid.SimpleListWalker(self.items)
+        new_list_walker = urwid.SimpleListWalker([
+            item for item in self.items if item.entry.repo.Enabled()])
         urwid.connect_signal(new_list_walker, 'modified', SearchResultsPanel.ListWalkerModifiedHandler(new_list_walker))
         self.original_widget = urwid.ListBox(new_list_walker)
 
@@ -572,10 +606,14 @@ palette = [('search_label', 'yellow,bold', 'dark cyan'),
            ('search_hint', 'light cyan', 'dark cyan'),
 
            ('message_bar', 'white', 'dark gray'),
+
            ('db_label', 'default', 'default'),
+           ('db_enabled', 'light cyan', 'default'),
            ('db_status_ready', 'light green', 'default'),
            ('db_status_loading', 'light red', 'default'),
            ('db_status_searching', 'yellow', 'default'),
+           ('db_rw', 'light red', 'default'),
+           ('db_ro', 'light green', 'default'),
 
            ('mark_none', 'default', 'dark gray'),
            ('mark_selected', 'light cyan', 'dark gray'),
@@ -647,8 +685,13 @@ def InputHandler(key):
             logging.error(traceback.format_exc())
         raise urwid.ExitMainLoop()
 
+def InputFilter(key, raw):
+    logging.debug(f"Input filter: key: '{key}', raw: '{raw}'")
+    return key
+
 main_loop = urwid.MainLoop(urwid.SolidFill(),
                            palette=palette,
+                           input_filter=InputFilter,
                            unhandled_input=InputHandler)
 
 with open("config.json") as config_file:
@@ -659,6 +702,10 @@ output_repo = OutputBibtexRepo(config['bib_output'], main_loop)
 bib_repos = [DblpRepo(main_loop)] \
           + [BibtexRepo(bib, main_loop) for bib in config['bib_files']] \
           + [output_repo]
+
+for repo, i in zip(bib_repos, itertools.count(1)):
+    repo.short_label = f"{i}"
+
 message_bar = urwid.Text(('message_bar', "Message"))
 
 search_results_panel = SearchResultsPanel()
