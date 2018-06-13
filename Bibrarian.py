@@ -50,9 +50,12 @@ class BibEntry:
             return True
 
         def keypress(self, size, key):
-            if key != ' ': return key
-            details_panel.original_widget = self.entry.DetailsWidget()
-            selected_keys_panel.Toggle(self.entry)
+            if key == ' ':
+                selected_keys_panel.Toggle(self.entry)
+            elif key == 'i':
+                details_panel.original_widget = self.entry.DetailsWidget()
+            else:
+                return key
 
     def __init__(self, source, repo):
         self.repo = repo
@@ -534,15 +537,6 @@ class DblpRepo(BibRepo):
                 yield DblpEntry(entry, self)
 
 class SearchResultsPanel(urwid.AttrMap):
-    class ListWalkerModifiedHandler:
-        def __init__(self, widget):
-            self.widget = widget
-            self.counter = 0
-
-        def __call__(self):
-            message_bar.set_text(f"Modified: {self.counter}.")
-            self.counter += 1
-
     def __init__(self):
         super().__init__(urwid.SolidFill(), None)
         self.serial = 0
@@ -566,10 +560,17 @@ class SearchResultsPanel(urwid.AttrMap):
                 self.SyncDisplay()
 
     def SyncDisplay(self):
-        new_list_walker = urwid.SimpleListWalker([
+        self.list_walker = urwid.SimpleListWalker([
             item for item in self.items if item.entry.repo.Enabled()])
-        urwid.connect_signal(new_list_walker, 'modified', SearchResultsPanel.ListWalkerModifiedHandler(new_list_walker))
-        self.original_widget = urwid.ListBox(new_list_walker)
+        self.original_widget = urwid.ListBox(self.list_walker)
+
+    def keypress(self, size, key):
+        if key == 'ctrl n':
+            self.original_widget._keypress_down(size)
+        elif key == 'ctrl p':
+            self.original_widget._keypress_up(size)
+        else:
+            self.original_widget.keypress(size, key)
 
 class SelectedKeysPanel(urwid.Pile):
     def __init__(self, *args, **kwargs):
@@ -652,11 +653,9 @@ class SearchBar(urwid.AttrMap):
     def __init__(self):
         super().__init__(urwid.SolidFill(), 'search_content')
 
-        self.search = urwid.Edit(('search_label', " Search: "))
-        self.hint = urwid.Text(('search_hint', "Type keywords to search"), align='right')
+        self.search = urwid.Edit(('search_label', "Search: "))
 
-        self.original_widget = urwid.Columns([('pack', self.search),
-                                              ('weight', 1, self.hint)])
+        self.original_widget = self.search
 
         self.search_panel = None
         self.search_serial = 0
@@ -669,11 +668,6 @@ class SearchBar(urwid.AttrMap):
 
         self.search_serial += 1
 
-        if text == '':
-            self.hint.set_text(('search_hint', "Type keywords to search"))
-        else:
-            self.hint.set_text(('search_hint', ""))
-
     def SetActiveRepos(self, repos):
         self.bib_repos = repos
 
@@ -681,16 +675,16 @@ class SearchBar(urwid.AttrMap):
         self.search_panel = search_panel
         urwid.connect_signal(self.search, 'change', self.TextChangeHandler)
 
-class InputHandler:
-    def __call__(self, key):
-        if key == 'ctrl w':
+class InputFilter:
+    def __call__(self, keys, raw):
+        if not keys: return keys
+
+        if keys[0] == 'ctrl w':
             try: output_repo.Write()
             except:
                 logging.error(traceback.format_exc())
             raise urwid.ExitMainLoop()
 
-class InputFilter:
-    def __call__(self, keys, raw):
         if self.MaskDatabases(keys[0]):
             search_results_panel.SyncDisplay()
             return
@@ -717,13 +711,14 @@ class InputFilter:
 
                     except: pass
             return True
+        elif key == 'enter':
+            top_widget.focus_position = 1 - top_widget.focus_position
         else:
             return False
 
 main_loop = urwid.MainLoop(urwid.SolidFill(),
                            palette=palette,
-                           input_filter=InputFilter(),
-                           unhandled_input=InputHandler())
+                           input_filter=InputFilter())
 
 with open("config.json") as config_file:
     config = json.load(config_file)
