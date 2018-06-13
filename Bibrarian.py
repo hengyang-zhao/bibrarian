@@ -361,6 +361,9 @@ class BibRepo:
         else:
             self.enabled_mark.set_text("[ ]")
 
+    def ToggleEnabled(self):
+        self.SetEnabled(not self.Enabled())
+
     def Search(self, search_text, serial):
         self.search_text = search_text
         with self.serial_lock:
@@ -678,21 +681,49 @@ class SearchBar(urwid.AttrMap):
         self.search_panel = search_panel
         urwid.connect_signal(self.search, 'change', self.TextChangeHandler)
 
-def InputHandler(key):
-    if key == 'ctrl w':
-        try: output_repo.Write()
-        except:
-            logging.error(traceback.format_exc())
-        raise urwid.ExitMainLoop()
+class InputHandler:
+    def __call__(self, key):
+        if key == 'ctrl w':
+            try: output_repo.Write()
+            except:
+                logging.error(traceback.format_exc())
+            raise urwid.ExitMainLoop()
 
-def InputFilter(key, raw):
-    logging.debug(f"Input filter: key: '{key}', raw: '{raw}'")
-    return key
+class InputFilter:
+    def __call__(self, keys, raw):
+        if self.MaskDatabases(keys[0]):
+            search_results_panel.SyncDisplay()
+            return
+
+        return keys
+
+    def MaskDatabases(self, key):
+        symbol_number_map = {s: n for s, n in zip(")!@#$%^&*(", range(10))}
+        if 'meta ' in key:
+            symbol = key[5:]
+            if symbol == '~':
+                for repo in bib_repos:
+                    repo.SetEnabled(True)
+            else:
+                number = symbol_number_map.get(symbol)
+                if number == 0:
+                    for repo in bib_repos:
+                        repo.SetEnabled(False)
+
+                else:
+                    try:
+                        repo = bib_repos[number - 1]
+                        repo.ToggleEnabled()
+
+                    except: pass
+            return True
+        else:
+            return False
 
 main_loop = urwid.MainLoop(urwid.SolidFill(),
                            palette=palette,
-                           input_filter=InputFilter,
-                           unhandled_input=InputHandler)
+                           input_filter=InputFilter(),
+                           unhandled_input=InputHandler())
 
 with open("config.json") as config_file:
     config = json.load(config_file)
