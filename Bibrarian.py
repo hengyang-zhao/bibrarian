@@ -609,7 +609,7 @@ class SelectedKeysPanel(urwid.Pile):
     def SyncDisplay(self):
         new_contents = [(ent.UniqueKeyItem(), ('pack', None)) for ent in self.entries.values()]
         if not new_contents:
-            new_contents = [(urwid.Text(('selected_hint', "(Empty. Press <SPACE> on search results to select.)")), ('pack', None))]
+            new_contents = [(urwid.Text(('selected_hint', "Hit <SPACE> on highlighted item to select.")), ('pack', None))]
 
         self.contents = new_contents
 
@@ -618,11 +618,13 @@ logging.basicConfig(filename="log.txt",
                     datefmt="%m-%d-%Y %H:%M:%S",
                     level=logging.DEBUG)
 
-palette = [('search_label', 'yellow,bold', 'dark cyan'),
-           ('search_content', 'white', 'dark cyan'),
-           ('search_hint', 'light cyan', 'dark cyan'),
+palette = [('search_label', 'yellow', 'dark magenta'),
+           ('search_content', 'white', 'dark magenta'),
+           ('search_hint', 'light cyan', 'dark magenta'),
 
            ('message_bar', 'white', 'dark gray'),
+
+           ('details_hint', 'dark green', 'default'),
 
            ('db_label', 'default', 'default'),
            ('db_enabled', 'light cyan', 'default'),
@@ -755,7 +757,9 @@ search_bar.AttachSearchPanel(search_results_panel)
 
 db_status_panel = urwid.Pile([repo.StatusIndicatorWidget() for repo in bib_repos])
 
-details_panel = urwid.AttrMap(urwid.SolidFill(), 'details')
+details_panel = urwid.AttrMap(urwid.Filler(urwid.Text(
+    ('details_hint', 'Hit <i> on highlighted item to update info.')), 'top'), None)
+
 selected_keys_panel = SelectedKeysPanel()
 
 output_repo.AttachSelectedKeys(selected_keys_panel)
