@@ -309,9 +309,18 @@ class BibRepo:
                 else:
                     raise LookupError(f"Invalid status: {status}")
 
+    class FdWriteHandler:
+        def __init__(self, loop):
+            self.loop = loop
+
+        def __call__(self, data):
+            self.loop.draw_screen()
+
     def __init__(self, source, event_loop):
         self.source = source
+
         self.event_loop = event_loop
+        self.redraw_fd = event_loop.watch_pipe(BibRepo.FdWriteHandler(event_loop))
 
         self.serial = 0
         self.serial_lock = threading.Lock()
@@ -441,12 +450,16 @@ class BibRepo:
     def Redraw(self):
         with BibRepo.REDRAW_LOCK:
             try:
-                #XXX: Will sometimes tear the screen
-                self.event_loop.draw_screen()
-            except: pass
+                os.write(self.redraw_fd, b"?")
+                logging.info(f"Wrote '?' to fd {self.redraw_fd}")
+            except:
+                logging.error(traceback.format_exc())
 
     def AttachPickedEntries(self, selected_entries_panel):
         self.selected_entries_panel = selected_entries_panel
+
+    def __del__(self):
+        os.close(self.redraw_fd)
 
 class BibtexRepo(BibRepo):
     def __init__(self, glob_expr, event_loop):
