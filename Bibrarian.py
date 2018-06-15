@@ -44,7 +44,7 @@ class BibEntry:
                               'title'),
                 self.info, self.source])
 
-            self.set_focus_map({palette_key: str(palette_key) + '+' for palette_key in [
+            self.set_focus_map({k: ('plain' if k is None else str(k)) + '+' for k in [
                 'title', 'author', 'delim', 'venue', 'year', 'source',
                 'bibkey', 'mark_none', 'mark_selected', 'title_delim',
                 'bibtex_ready', 'bibtex_fetching', None]})
@@ -54,10 +54,10 @@ class BibEntry:
 
         def keypress(self, size, key):
             if key == ' ':
-                selected_keys_panel.Toggle(self.entry)
+                self.entry.repo.selected_keys_panel.Toggle(self.entry)
                 self.entry.OnSelectionHandler()
             elif key == 'i':
-                details_panel.original_widget = self.entry.details_widget
+                self.entry.repo.details_panel.original_widget = self.entry.details_widget
             else:
                 return key
 
@@ -443,6 +443,8 @@ class BibRepo:
 
         self.search_results_panel = None
         self.message_bar = None
+        self.selected_entries_panel = None
+        self.details_panel = None
 
         self.loading_done = threading.Event()
         self.searching_done = threading.Event()
@@ -458,7 +460,6 @@ class BibRepo:
         self._enabled_mark = urwid.Text("")
         self.enabled = True
 
-        self.selected_entries_panel = None
         self._status_indicator_widget = BibRepo.StatusIndicatorWidgetImpl(self)
 
         self.access_type = 'ro'
@@ -596,8 +597,9 @@ class BibtexRepo(BibRepo):
 
         if not self.bib_files:
             logging.warning(f"Glob expr '{glob_expr}' matches no target")
-            message_bar.Post(f"Glob expr '{glob_expr}' matches no target.",
-                             'warning')
+            if self.message_bar is not None:
+                self.message_bar.Post(f"Glob expr '{glob_expr}' matches no target.",
+                                      'warning')
             return 'no file'
 
         self.bib_entries = []
@@ -875,16 +877,19 @@ class DetailsPanel(urwid.AttrMap):
             ('details_hint', 'Hit <i> on highlighted item to update info.')), 'top'), None)
 
 class InputFilter:
+    def __init__(self):
+        self.widget = None
+
     def __call__(self, keys, raw):
         if not keys: return keys
 
         if keys[0] == 'ctrl w':
-            try: output_repo.Write()
+            try: self.widget.output_repo.Write()
             except:
                 logging.error(traceback.format_exc())
             raise urwid.ExitMainLoop()
         elif self.MaskDatabases(keys[0]):
-            search_results_panel.SyncDisplay()
+            self.widget.search_results_panel.SyncDisplay()
             return
 
         return keys
@@ -894,7 +899,7 @@ class InputFilter:
         if 'meta ' in key:
             symbol = key[5:]
             if symbol == '~':
-                for repo in bib_repos:
+                for repo in self.widget.bib_repos:
                     repo.enabled = True
             else:
                 number = symbol_number_map.get(symbol)
@@ -909,116 +914,126 @@ class InputFilter:
                     except: pass
             return True
         elif key == 'enter':
-            top_widget.focus_position = 1 - top_widget.focus_position
+            self.widget.focus_position = 1 - self.widget.focus_position
         else:
             return False
 
-logging.basicConfig(filename=f"/tmp/{getpass.getuser()}_babrarian.log",
-                    format="[%(asctime)s %(levelname)7s] %(threadName)s: %(message)s",
-                    datefmt="%m-%d-%Y %H:%M:%S",
-                    level=logging.DEBUG)
+class TopWidget(urwid.Pile):
+    def __init__(self, config, event_loop):
+        super().__init__([urwid.SolidFill()])
 
-palette = [('search_label', 'yellow', 'dark magenta'),
-           ('search_content', 'white', 'dark magenta'),
-           ('search_hint', 'light cyan', 'dark magenta'),
+        message_bar = MessageBar(event_loop)
+        search_results_panel = SearchResultsPanel()
+        details_panel = DetailsPanel()
+        selected_keys_panel = SelectedKeysPanel()
 
-           ('msg_tips', 'white', 'dark gray'),
-           ('msg_normal', 'light green', 'dark gray'),
-           ('msg_warning', 'yellow', 'dark gray'),
-           ('msg_error', 'light red', 'dark gray'),
+        output_repo = OutputBibtexRepo(config['bib_output'], event_loop)
 
-           ('details_hint', 'dark green', 'default'),
+        bib_repos = [DblpRepo(event_loop)] \
+                + [BibtexRepo(bib, event_loop) for bib in config['bib_files']] \
+                + [output_repo]
 
-           ('db_label', 'default', 'default'),
-           ('db_enabled', 'light cyan', 'default'),
-           ('db_status_ready', 'light green', 'default'),
-           ('db_status_loading', 'light cyan', 'default'),
-           ('db_status_searching', 'yellow', 'default'),
-           ('db_status_error', 'light red', 'default'),
-           ('db_rw', 'light magenta', 'default'),
-           ('db_ro', 'light green', 'default'),
+        for repo, i in zip(bib_repos, itertools.count(1)):
+            repo.short_label = f"{i}"
+            repo.message_bar = message_bar
+            repo.search_results_panel = search_results_panel
+            repo.selected_keys_panel = selected_keys_panel
+            repo.details_panel = details_panel
 
-           ('mark_none', 'default', 'dark gray'),
-           ('mark_selected', 'light cyan', 'dark gray'),
-           ('title', 'yellow', 'dark gray'),
-           ('title_delim', 'default', 'dark gray'),
-           ('source', 'dark green', 'default'),
-           ('author', 'white', 'default'),
-           ('venue', 'underline', 'default'),
-           ('year', 'light gray', 'default'),
-           ('delim', 'default', 'default'),
-           ('bibkey', 'light green', 'default'),
-           ('bibtex_ready', 'dark green', 'default'),
-           ('bibtex_fetching', 'yellow', 'default'),
+        search_bar = SearchBar()
+        search_bar.bib_repos = bib_repos
+        search_bar.search_results_panel = search_results_panel
 
-           ('None+', 'default', 'dark magenta'),
-           ('mark_none+', 'default', 'light magenta'),
-           ('mark_selected+', 'light cyan', 'light magenta'),
-           ('title+', 'yellow', 'light magenta'),
-           ('title_delim+', 'default', 'light magenta'),
-           ('source+', 'light green', 'dark magenta'),
-           ('author+', 'white', 'dark magenta'),
-           ('venue+', 'white,underline', 'dark magenta'),
-           ('year+', 'white', 'dark magenta'),
-           ('delim+', 'default', 'dark magenta'),
-           ('bibkey+', 'light green', 'dark magenta'),
-           ('bibtex_ready+', 'dark green', 'dark magenta'),
-           ('bibtex_fetching+', 'yellow', 'dark magenta'),
+        db_status_panel = urwid.Pile([repo.status_indicator_widget for repo in bib_repos])
+        output_repo.selected_keys_panel = selected_keys_panel
 
-           ('selected_key', 'light cyan', 'default'),
-           ('selected_hint', 'dark cyan', 'default'),
+        right_panel = urwid.Pile([('pack', urwid.LineBox(db_status_panel, title="Database Info")),
+                                ('weight', 5, urwid.LineBox(details_panel, title="Detailed Info")),
+                                ('pack', urwid.LineBox(selected_keys_panel, title="Selected Entries"))])
 
-           ('detail_key', 'light green', 'default'),
-           ('detail_value', 'default', 'default'),
+        main_widget = urwid.Columns([('weight', 2, urwid.LineBox(search_results_panel, title="Search Results")),
+                                    ('weight', 1, right_panel)])
 
-           ('banner_hi', 'light magenta', 'default'),
-           ('banner_lo', 'dark magenta', 'default'),
-           ]
+        self.contents = [(search_bar, ('pack', None)),
+                         (main_widget, ('weight', 1)),
+                         (message_bar, ('pack', None))]
 
-main_loop = urwid.MainLoop(urwid.SolidFill(),
-                           palette=palette,
-                           input_filter=InputFilter())
+if __name__ == '__main__':
+    logging.basicConfig(filename=f"/tmp/{getpass.getuser()}_babrarian.log",
+                        format="[%(asctime)s %(levelname)7s] %(threadName)s: %(message)s",
+                        datefmt="%m-%d-%Y %H:%M:%S",
+                        level=logging.DEBUG)
 
-message_bar = MessageBar(main_loop)
-search_results_panel = SearchResultsPanel()
-details_panel = DetailsPanel()
-selected_keys_panel = SelectedKeysPanel()
+    palette = [('search_label', 'yellow', 'dark magenta'),
+               ('search_content', 'white', 'dark magenta'),
+               ('search_hint', 'light cyan', 'dark magenta'),
 
-with open("config.json") as config_file:
-    config = json.load(config_file)
+               ('msg_tips', 'white', 'dark gray'),
+               ('msg_normal', 'light green', 'dark gray'),
+               ('msg_warning', 'yellow', 'dark gray'),
+               ('msg_error', 'light red', 'dark gray'),
 
-output_repo = OutputBibtexRepo(config['bib_output'], main_loop)
+               ('details_hint', 'dark green', 'default'),
 
-bib_repos = [DblpRepo(main_loop)] \
-          + [BibtexRepo(bib, main_loop) for bib in config['bib_files']] \
-          + [output_repo]
+               ('db_label', 'default', 'default'),
+               ('db_enabled', 'light cyan', 'default'),
+               ('db_status_ready', 'light green', 'default'),
+               ('db_status_loading', 'light cyan', 'default'),
+               ('db_status_searching', 'yellow', 'default'),
+               ('db_status_error', 'light red', 'default'),
+               ('db_rw', 'light magenta', 'default'),
+               ('db_ro', 'light green', 'default'),
 
-for repo, i in zip(bib_repos, itertools.count(1)):
-    repo.short_label = f"{i}"
-    repo.message_bar = message_bar
-    repo.search_results_panel = search_results_panel
-    repo.selected_keys_panel = selected_keys_panel
+               ('mark_none', 'default', 'dark gray'),
+               ('mark_selected', 'light cyan', 'dark gray'),
+               ('title', 'yellow', 'dark gray'),
+               ('title_delim', 'default', 'dark gray'),
+               ('source', 'dark green', 'default'),
+               ('author', 'white', 'default'),
+               ('venue', 'underline', 'default'),
+               ('year', 'light gray', 'default'),
+               ('delim', 'default', 'default'),
+               ('bibkey', 'light green', 'default'),
+               ('bibtex_ready', 'dark green', 'default'),
+               ('bibtex_fetching', 'yellow', 'default'),
 
-search_bar = SearchBar()
-search_bar.bib_repos = bib_repos
-search_bar.search_results_panel = search_results_panel
+               ('plain+', 'default', 'dark magenta'),
+               ('mark_none+', 'default', 'light magenta'),
+               ('mark_selected+', 'light cyan', 'light magenta'),
+               ('title+', 'yellow', 'light magenta'),
+               ('title_delim+', 'default', 'light magenta'),
+               ('source+', 'light green', 'dark magenta'),
+               ('author+', 'white', 'dark magenta'),
+               ('venue+', 'white,underline', 'dark magenta'),
+               ('year+', 'white', 'dark magenta'),
+               ('delim+', 'default', 'dark magenta'),
+               ('bibkey+', 'light green', 'dark magenta'),
+               ('bibtex_ready+', 'dark green', 'dark magenta'),
+               ('bibtex_fetching+', 'yellow', 'dark magenta'),
 
-db_status_panel = urwid.Pile([repo.status_indicator_widget for repo in bib_repos])
-output_repo.selected_keys_panel = selected_keys_panel
+               ('selected_key', 'light cyan', 'default'),
+               ('selected_hint', 'dark cyan', 'default'),
 
-right_panel = urwid.Pile([('pack', urwid.LineBox(db_status_panel, title="Database Info")),
-                          ('weight', 5, urwid.LineBox(details_panel, title="Detailed Info")),
-                          ('pack', urwid.LineBox(selected_keys_panel, title="Selected Entries"))])
+               ('detail_key', 'light green', 'default'),
+               ('detail_value', 'default', 'default'),
 
-main_widget = urwid.Columns([('weight', 2, urwid.LineBox(search_results_panel, title="Search Results")),
-                             ('weight', 1, right_panel)])
+               ('banner_hi', 'light magenta', 'default'),
+               ('banner_lo', 'dark magenta', 'default'),
+               ]
 
-top_widget = urwid.Pile([('pack', search_bar),
-                         ('weight', 1, main_widget),
-                         ('pack', message_bar)])
+    with open("config.json") as config_file:
+        config = json.load(config_file)
 
-main_loop.widget = top_widget
+    input_filter = InputFilter()
+    main_loop = urwid.MainLoop(urwid.SolidFill(),
+                               palette=palette,
+                               input_filter=input_filter)
 
-try: main_loop.run()
-except KeyboardInterrupt:
-    sys.exit(0)
+    top_widget = TopWidget(config, main_loop)
+
+    input_filter.widget = top_widget
+    main_loop.widget = top_widget
+
+    try: main_loop.run()
+    except KeyboardInterrupt:
+        sys.exit(0)
