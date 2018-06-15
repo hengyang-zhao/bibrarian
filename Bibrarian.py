@@ -805,12 +805,12 @@ class MessageBar(urwid.AttrMap):
 
         self.next_message_scheduled = 0
 
-        self.tips = [
-                "Use ctrl+c to exit the program with all files untouched.",
-                "Use ctrl+w to write the selected entries to the target file.",
-                "Use up (or ctrl+p or k) and down (or ctrl+n or j) to navigate the search results.",
-                "Use alt+shift+n to toggle enabled/disabled the n-th bib repo.",
-                "This software is powered by Python 3, dblp API, Pybtex, and urwid.",
+        self.messages = [
+                "Tip: Use ctrl+c to exit the program with all files untouched.",
+                "Tip: Use ctrl+w to write the selected entries to the target file.",
+                "Tip: Use up (or ctrl+p or k) and down (or ctrl+n or j) to navigate the search results.",
+                "Tip: Use alt+shift+n to toggle enabled/disabled the n-th bib repo.",
+                "Tip: This software is powered by Python 3, dblp API, Pybtex, and urwid.",
         ]
 
         self.msg_lock = threading.Lock()
@@ -847,11 +847,11 @@ class MessageBar(urwid.AttrMap):
 
     def _PeriodicTrigger(self):
         while True:
-            for message in self.tips:
+            for message in self.messages:
                 while True:
                     if time.time() >= self.next_message_scheduled:
                         with self.msg_lock:
-                            self.original_widget = urwid.Text(('msg_tips', f"Tip: {message}"))
+                            self.original_widget = urwid.Text(('msg_tips', "message"))
                             self.next_message_ready.set()
                             self.next_message_scheduled = time.time() + self.tips_delay
                         time.sleep(self.tips_delay)
@@ -901,7 +901,6 @@ class InputFilter:
                 if number == 0:
                     for repo in bib_repos:
                         repo.enabled = False
-
                 else:
                     try:
                         repo = bib_repos[number - 1]
@@ -1023,4 +1022,3 @@ main_loop.widget = top_widget
 try: main_loop.run()
 except KeyboardInterrupt:
     sys.exit(0)
-
