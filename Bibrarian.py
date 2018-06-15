@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import traceback
+import subprocess
 
 import urllib
 import urllib.request
@@ -58,6 +59,8 @@ class BibEntry:
                 self.entry.OnSelectionHandler()
             elif key == 'i':
                 self.entry.repo.details_panel.original_widget = self.entry.details_widget
+            elif key == '@':
+                self.entry.OpenInBrowser()
             else:
                 return key
 
@@ -81,6 +84,9 @@ class BibEntry:
 
     @property
     def bibkey(self): return NotImplemented
+
+    @property
+    def url(self): return NotImplemented
 
     @property
     def abbrev_authors(self):
@@ -150,6 +156,22 @@ class BibEntry:
 
     def OnSelectionHandler(self): pass
 
+    def OpenInBrowser(self):
+        if self.url is None:
+            self.repo.message_bar.Post("Could not infer url of this entry.",
+                                       "warning", 1)
+            return
+
+        status = subprocess.run(["python3", "-m", "webbrowser", "-t", self.url],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        if status.returncode == 0:
+            self.repo.message_bar.Post(f"Opened url '{self.url}'.", 'normal', 1)
+        else:
+            self.repo.message_bar.Post(
+                    f"Error occured when opening url '{self.url}' (code {status.returncode})",
+                    'error', 1)
+
     def _InitializeSearchPanelWidget(self):
         if self._search_panel_widget is None:
             self._search_panel_widget = BibEntry.SearchPanelWidgetImpl(self)
@@ -191,7 +213,7 @@ class DblpEntry(BibEntry):
 
     def __init__(self, dblp_entry, repo):
         super().__init__('dblp.org', repo)
-        self._data = dblp_entry
+        self.data = dblp_entry
 
         self._details_widget = None
         self._bibkey = None
@@ -208,9 +230,6 @@ class DblpEntry(BibEntry):
     def __del__(self):
         if self._redraw_fd is not None:
             os.close(self._redraw_fd)
-    @property
-    def data(self):
-        return self._data
 
     @property
     def pyb_entry(self):
@@ -249,6 +268,11 @@ class DblpEntry(BibEntry):
             self._bibkey = f"{base}:{sha1[:4].upper()}"
 
         return self._bibkey
+
+    @property
+    def url(self):
+        try: return self.data['info']['ee']
+        except: return None
 
     @property
     def details_widget(self):
@@ -373,6 +397,11 @@ class BibtexEntry(BibEntry):
     @property
     def bibkey(self):
         return self._bibkey
+
+    @property
+    def url(self):
+        try: return self.entry.fields['url']
+        except: return None
 
     @property
     def pyb_entry(self):
@@ -796,11 +825,12 @@ class SearchBar(urwid.AttrMap):
 
 class MessageBar(urwid.AttrMap):
     def __init__(self, loop):
-        super().__init__(urwid.Text(""), 'msg_normal')
+        super().__init__(urwid.Text("Welcome to bibrarian."), 'msg_normal')
 
         self.event_loop = loop
         self._redraw_fd = loop.watch_pipe(self._FdWriteHandler)
 
+        self.initial_delay = 1
         self.post_delay = 6
         self.tips_delay = 4
         self.next_message_ready = threading.Event()
@@ -808,11 +838,12 @@ class MessageBar(urwid.AttrMap):
         self.next_message_scheduled = 0
 
         self.messages = [
-                "Tip: Use ctrl+c to exit the program with all files untouched.",
-                "Tip: Use ctrl+w to write the selected entries to the target file.",
-                "Tip: Use up (or ctrl+p or k) and down (or ctrl+n or j) to navigate the search results.",
-                "Tip: Use alt+shift+n to toggle enabled/disabled the n-th bib repo.",
-                "Tip: This software is powered by Python 3, dblp API, Pybtex, and urwid.",
+                "Use ctrl+c to exit the program with all files untouched.",
+                "Use ctrl+w to write the selected entries to the target file.",
+                "Press @ (shift+2) open the entry using system browser.",
+                "Use up (or ctrl+p or k) and down (or ctrl+n or j) to navigate the search results.",
+                "Use alt+shift+n to toggle enabled/disabled the n-th bib repo.",
+                "This software is powered by Python 3, dblp API, Pybtex, and urwid.",
         ]
 
         self.msg_lock = threading.Lock()
@@ -826,7 +857,7 @@ class MessageBar(urwid.AttrMap):
         self.periodic_trigger_thread.start()
         self.message_update_thread.start()
 
-    def Post(self, message, severity='normal'):
+    def Post(self, message, severity='normal', delay=None):
         if severity == 'normal':
             label = "Message"
             style = 'msg_normal'
@@ -842,18 +873,21 @@ class MessageBar(urwid.AttrMap):
         with self.msg_lock:
             self.original_widget = urwid.Text((style, f"{label}: {message}"))
             self.next_message_ready.set()
-            self.next_message_scheduled = time.time() + self.post_delay
+
+            if delay is None: delay = self.post_delay
+            self.next_message_scheduled = time.time() + delay
 
     def _FdWriteHandler(self, data):
         self.event_loop.draw_screen()
 
     def _PeriodicTrigger(self):
+        time.sleep(self.initial_delay)
         while True:
             for message in self.messages:
                 while True:
                     if time.time() >= self.next_message_scheduled:
                         with self.msg_lock:
-                            self.original_widget = urwid.Text(('msg_tips', "message"))
+                            self.original_widget = urwid.Text(('msg_tips', f"Tip: {message}"))
                             self.next_message_ready.set()
                             self.next_message_scheduled = time.time() + self.tips_delay
                         time.sleep(self.tips_delay)
@@ -904,11 +938,11 @@ class InputFilter:
             else:
                 number = symbol_number_map.get(symbol)
                 if number == 0:
-                    for repo in bib_repos:
+                    for repo in self.widget.bib_repos:
                         repo.enabled = False
                 else:
                     try:
-                        repo = bib_repos[number - 1]
+                        repo = self.widget.bib_repos[number - 1]
                         repo.enabled = not repo.enabled
 
                     except: pass
@@ -922,41 +956,45 @@ class TopWidget(urwid.Pile):
     def __init__(self, config, event_loop):
         super().__init__([urwid.SolidFill()])
 
-        message_bar = MessageBar(event_loop)
-        search_results_panel = SearchResultsPanel()
-        details_panel = DetailsPanel()
-        selected_keys_panel = SelectedKeysPanel()
+        self.message_bar = MessageBar(event_loop)
+        self.search_results_panel = SearchResultsPanel()
+        self.details_panel = DetailsPanel()
+        self.selected_keys_panel = SelectedKeysPanel()
 
-        output_repo = OutputBibtexRepo(config['bib_output'], event_loop)
+        self.output_repo = OutputBibtexRepo(config['bib_output'], event_loop)
 
-        bib_repos = [DblpRepo(event_loop)] \
+        self.bib_repos = [DblpRepo(event_loop)] \
                 + [BibtexRepo(bib, event_loop) for bib in config['bib_files']] \
-                + [output_repo]
+                + [self.output_repo]
 
-        for repo, i in zip(bib_repos, itertools.count(1)):
+        for repo, i in zip(self.bib_repos, itertools.count(1)):
             repo.short_label = f"{i}"
-            repo.message_bar = message_bar
-            repo.search_results_panel = search_results_panel
-            repo.selected_keys_panel = selected_keys_panel
-            repo.details_panel = details_panel
+            repo.message_bar = self.message_bar
+            repo.search_results_panel = self.search_results_panel
+            repo.selected_keys_panel = self.selected_keys_panel
+            repo.details_panel = self.details_panel
 
-        search_bar = SearchBar()
-        search_bar.bib_repos = bib_repos
-        search_bar.search_results_panel = search_results_panel
+        self.search_bar = SearchBar()
+        self.search_bar.bib_repos = self.bib_repos
+        self.search_bar.search_results_panel = self.search_results_panel
 
-        db_status_panel = urwid.Pile([repo.status_indicator_widget for repo in bib_repos])
-        output_repo.selected_keys_panel = selected_keys_panel
+        self.db_status_panel = urwid.Pile([
+            repo.status_indicator_widget for repo in self.bib_repos])
 
-        right_panel = urwid.Pile([('pack', urwid.LineBox(db_status_panel, title="Database Info")),
-                                ('weight', 5, urwid.LineBox(details_panel, title="Detailed Info")),
-                                ('pack', urwid.LineBox(selected_keys_panel, title="Selected Entries"))])
+        self.output_repo.selected_keys_panel = self.selected_keys_panel
 
-        main_widget = urwid.Columns([('weight', 2, urwid.LineBox(search_results_panel, title="Search Results")),
-                                    ('weight', 1, right_panel)])
+        self.right_panel = urwid.Pile([
+            ('pack', urwid.LineBox(self.db_status_panel, title="Database Info")),
+            ('weight', 5, urwid.LineBox(self.details_panel, title="Detailed Info")),
+            ('pack', urwid.LineBox(self.selected_keys_panel, title="Selected Entries"))])
 
-        self.contents = [(search_bar, ('pack', None)),
-                         (main_widget, ('weight', 1)),
-                         (message_bar, ('pack', None))]
+        self.main_widget = urwid.Columns([
+            ('weight', 2, urwid.LineBox(self.search_results_panel, title="Search Results")),
+            ('weight', 1, self.right_panel)])
+
+        self.contents = [(self.search_bar, ('pack', None)),
+                         (self.main_widget, ('weight', 1)),
+                         (self.message_bar, ('pack', None))]
 
 if __name__ == '__main__':
     logging.basicConfig(filename=f"/tmp/{getpass.getuser()}_babrarian.log",
