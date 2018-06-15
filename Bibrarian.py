@@ -4,6 +4,7 @@ import json
 import sys
 import time
 import logging
+import hashlib
 import threading
 import traceback
 import itertools
@@ -44,7 +45,8 @@ class BibEntry:
 
             self.set_focus_map({palette_key: str(palette_key) + '+' for palette_key in [
                 'title', 'author', 'delim', 'venue', 'year', 'source',
-                'bibkey', 'mark_none', 'mark_selected', 'title_delim', None]})
+                'bibkey', 'mark_none', 'mark_selected', 'title_delim',
+                'bibtex_ready', 'bibtex_fetching', None]})
 
         def selectable(self):
             return True
@@ -52,6 +54,7 @@ class BibEntry:
         def keypress(self, size, key):
             if key == ' ':
                 selected_keys_panel.Toggle(self.entry)
+                self.entry.OnSelection()
             elif key == 'i':
                 details_panel.original_widget = self.entry.DetailsWidget()
             else:
@@ -70,8 +73,9 @@ class BibEntry:
     def BibKey(self): return NotImplemented
 
     def ToPybEntry(self): return NotImplemented
-
     def DetailsWidget(self): return NotImplemented
+
+    def OnSelection(self): pass
 
     def AbbrevAuthors(self):
         authors = self.Authors()
@@ -157,10 +161,68 @@ class DblpEntry(BibEntry):
                              (self.info_items, ('pack', None)),
                              (urwid.SolidFill(), ('weight', 1))]
 
+    class FdWriteHandler:
+        def __init__(self, loop):
+            self.loop = loop
+
+        def __call__(self, data):
+            self.loop.draw_screen()
+
     def __init__(self, dblp_entry, repo):
         super().__init__('dblp.org', repo)
         self.data = dblp_entry
         self.details_widget = None
+        self.bib_key = None
+
+        self.redraw_fd = None
+
+        self.pybtex_entry = None
+        self.bibtex_loading_done = threading.Event()
+
+        self.bibtex_loading_thread = threading.Thread(
+                name=f"bibtex-{self.BibKey()}",
+                target=self.LoadPybtexEntry,
+                daemon=False)
+
+    def OnSelection(self):
+        if self.redraw_fd is None:
+            event_loop = self.repo.event_loop
+            self.redraw_fd = event_loop.watch_pipe(DblpEntry.FdWriteHandler(event_loop))
+            self.bibtex_loading_thread.start()
+
+    def LoadPybtexEntry(self):
+        bib_url = f"https://dblp.org/rec/bib2/{self.data['info']['key']}.bib"
+        try:
+            if self.search_panel_widget is not None:
+                self.search_panel_widget.source.set_text([
+                    ('source', f"{self.Source()}"),
+                    ('delim', "::"),
+                    ('bibkey', f"{self.BibKey()}"),
+                    ('bibtex_fetching', " (fetching bibtex)")])
+                os.write(self.redraw_fd, b"?")
+
+            with urllib.request.urlopen(bib_url) as remote:
+                bib_text = remote.read().decode('utf-8')
+
+            pyb_db = pybtex.database.parse_string(bib_text, 'bibtex')
+            self.pybtex_entry = pyb_db.entries[f"DBLP:{self.data['info']['key']}"]
+
+            if self.search_panel_widget is not None:
+                self.search_panel_widget.source.set_text([
+                    ('source', f"{self.Source()}"),
+                    ('delim', "::"),
+                    ('bibkey', f"{self.BibKey()}"),
+                    ('bibtex_ready', " (bibtex ready)")])
+                os.write(self.redraw_fd, b"?")
+
+        except Exception as e:
+            logging.error(f"Error when fetching bibtex entry from DBLP: Entry: {self.data} {traceback.format_exc()}")
+
+        self.bibtex_loading_done.set()
+
+    def ToPybEntry(self):
+        self.bibtex_loading_done.wait()
+        return self.pybtex_entry
 
     def Authors(self):
         try:
@@ -182,7 +244,13 @@ class DblpEntry(BibEntry):
         except: return "Unknown"
 
     def BibKey(self):
-        return self.data['info']['key'].split('/')[-1]
+        if self.bib_key is None:
+            flat_key = self.data['info']['key']
+            base = flat_key.split('/')[-1]
+            sha1 = hashlib.sha1(flat_key.encode('utf-8')).hexdigest()
+            self.bib_key = f"{base}:{sha1[:4].upper()}"
+
+        return self.bib_key
 
     def InitializeDetailsWidget(self):
         if self.details_widget is None:
@@ -191,6 +259,10 @@ class DblpEntry(BibEntry):
     def DetailsWidget(self):
         self.InitializeDetailsWidget()
         return self.details_widget
+
+    def __del__(self):
+        if self.redraw_fd is not None:
+            os.close(self.redraw_fd)
 
 class BibtexEntry(BibEntry):
 
@@ -328,10 +400,7 @@ class BibRepo:
         self.search_result_sinks = []
 
         self.loading_done = threading.Event()
-        self.loading_done.clear()
-
         self.searching_done = threading.Event()
-        self.searching_done.clear()
 
         self.loading_thread = threading.Thread(name=f"load-{self.source}",
                                                target=self.LoadingThreadWrapper,
@@ -522,6 +591,11 @@ class OutputBibtexRepo(BibtexRepo):
         entries = {e.BibKey(): e.ToPybEntry() for e in self.bib_entries}
         entries.update({e.BibKey(): e.ToPybEntry() for e in selected_keys_panel.entries.values()})
 
+        for key, entry in entries.items():
+            if entry is None:
+                logging.error(f"Key {key} has empty entry. Not writing to file.")
+                return
+
         pybtex.database.BibliographyData(entries).to_file(self.output_file)
         logging.info(f"Wrote to file '{self.output_file}'")
 
@@ -644,6 +718,8 @@ palette = [('search_label', 'yellow', 'dark magenta'),
            ('year', 'light gray', 'default'),
            ('delim', 'default', 'default'),
            ('bibkey', 'light green', 'default'),
+           ('bibtex_ready', 'dark green', 'default'),
+           ('bibtex_fetching', 'yellow', 'default'),
 
            ('None+', 'default', 'dark magenta'),
            ('mark_none+', 'default', 'light magenta'),
@@ -656,6 +732,8 @@ palette = [('search_label', 'yellow', 'dark magenta'),
            ('year+', 'white', 'dark magenta'),
            ('delim+', 'default', 'dark magenta'),
            ('bibkey+', 'light green', 'dark magenta'),
+           ('bibtex_ready+', 'dark green', 'dark magenta'),
+           ('bibtex_fetching+', 'yellow', 'dark magenta'),
 
            ('selected_key', 'light cyan', 'default'),
            ('selected_hint', 'dark cyan', 'default'),
