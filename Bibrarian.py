@@ -1,13 +1,14 @@
-import os
+import getpass
 import glob
-import json
-import sys
-import time
-import logging
 import hashlib
-import threading
-import traceback
 import itertools
+import json
+import logging
+import os
+import sys
+import threading
+import time
+import traceback
 
 import urllib
 import urllib.request
@@ -710,7 +711,7 @@ class SelectedKeysPanel(urwid.Pile):
 
         self.contents = new_contents
 
-logging.basicConfig(filename="log.txt",
+logging.basicConfig(filename=f"/tmp/{getpass.getuser()}_babrarian.log",
                     format="[%(asctime)s %(levelname)7s] %(threadName)s: %(message)s",
                     datefmt="%m-%d-%Y %H:%M:%S",
                     level=logging.DEBUG)
