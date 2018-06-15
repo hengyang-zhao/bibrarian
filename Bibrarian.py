@@ -25,17 +25,17 @@ class BibEntry:
             super().__init__(urwid.SolidFill(), None)
             self.entry = entry
 
-            self.title = urwid.AttrMap(urwid.Text(entry.Title()), 'title')
-            self.info = urwid.Text([('author', f"{entry.AbbrevAuthors()}"),
+            self.title = urwid.AttrMap(urwid.Text(entry.title), 'title')
+            self.info = urwid.Text([('author', f"{entry.abbrev_authors}"),
                                     ('delim', ". "),
-                                    ('venue', f"{entry.Venue()}"),
+                                    ('venue', f"{entry.venue}"),
                                     ('delim', ", "),
-                                    ('year', f"{entry.Year()}"),
+                                    ('year', f"{entry.year}"),
                                     ('delim', ".")])
             self.mark = urwid.AttrMap(urwid.Text(('mark_none', "[M]"), align='right'), None)
-            self.source = urwid.Text([('source', f"{entry.Source()}"),
+            self.source = urwid.Text([('source', f"{entry.source}"),
                                       ('delim', "::"),
-                                      ('bibkey', f"{entry.BibKey()}")])
+                                      ('bibkey', f"{entry.bibkey}")])
 
             self.original_widget = urwid.Pile([
                 urwid.AttrMap(urwid.Columns([('weight', 1, self.title),
@@ -55,49 +55,61 @@ class BibEntry:
         def keypress(self, size, key):
             if key == ' ':
                 selected_keys_panel.Toggle(self.entry)
-                self.entry.OnSelection()
+                self.entry.OnSelectionHandler()
             elif key == 'i':
-                details_panel.original_widget = self.entry.DetailsWidget()
+                details_panel.original_widget = self.entry.details_widget
             else:
                 return key
 
     def __init__(self, source, repo):
         self.repo = repo
-        self.source = source
-        self.search_panel_widget = None
-        self.mark = None
+        self._source = source
+        self._search_panel_widget = None
+        self._mark = None
 
-    def Authors(self): return NotImplemented
-    def Title(self): return NotImplemented
-    def Year(self): return NotImplemented
-    def Venue(self): return NotImplemented
-    def BibKey(self): return NotImplemented
+    @property
+    def authors(self): return NotImplemented
 
-    def ToPybEntry(self): return NotImplemented
-    def DetailsWidget(self): return NotImplemented
+    @property
+    def title(self): return NotImplemented
 
-    def OnSelection(self): pass
+    @property
+    def year(self): return NotImplemented
 
-    def AbbrevAuthors(self):
-        authors = self.Authors()
+    @property
+    def venue(self): return NotImplemented
+
+    @property
+    def bibkey(self): return NotImplemented
+
+    @property
+    def abbrev_authors(self):
+        authors = self.authors
         if len(authors) == 1:
             return f"{authors[0]}"
         else:
             return f"{authors[0]} et al"
 
-    def Source(self):
-        return self.source
+    @property
+    def pyb_entry(self): return NotImplemented
+
+    @property
+    def details_widget(self): return NotImplemented
+
+    @property
+    def source(self):
+        return self._source
 
     def Match(self, keywords):
         trivial = True
         for keyword in filter(lambda k: len(k) >= 3, keywords):
             trivial = False
 
-            if keyword.upper() in self.Title().upper():
+            if keyword.upper() in self.title.upper():
                 continue
 
             matched = False
-            for author in self.Authors():
+            for author in self.authors:
                 if keyword.upper() in author.upper():
                     matched = True
                     break
@@ -106,30 +118,41 @@ class BibEntry:
 
         return not trivial
 
-    def SearchPanelWidget(self):
-        self.InitializeSearchPanelWidget()
-        return self.search_panel_widget
+    @property
+    def search_panel_widget(self):
+        self._InitializeSearchPanelWidget()
+        return self._search_panel_widget
 
-    def Mark(self, mark):
-        self.InitializeSearchPanelWidget()
-        if mark is None:
-            self.search_panel_widget.mark.original_widget.set_text(
+    @property
+    def mark(self):
+        return self._mark
+
+    @mark.setter
+    def mark(self, value):
+        self._InitializeSearchPanelWidget()
+        self._mark = value
+        if value is None:
+            self._search_panel_widget.mark.original_widget.set_text(
                     [('title_delim', "["), ('mark_none', " "), ('title_delim', "]")])
-        elif mark == 'selected':
-            self.search_panel_widget.mark.original_widget.set_text(
+        elif value == 'selected':
+            self._search_panel_widget.mark.original_widget.set_text(
                     [('title_delim', "["), ('mark_selected', "X"), ('title_delim', "]")])
         else:
             raise ValueError(f"Invalid mark: {mark}")
 
-    def InitializeSearchPanelWidget(self):
-        if self.search_panel_widget is None:
-            self.search_panel_widget = BibEntry.SearchPanelWidgetImpl(self)
+    @property
+    def unique_key(self):
+        return f"{self.source}::{self.bibkey}"
 
-    def UniqueKey(self):
-        return f"{self.Source()}::{self.BibKey()}"
+    @property
+    def unique_key_item(self):
+        return urwid.Text([('selected_key', self.bibkey), ('selected_hint', f"({self.source})")])
 
-    def UniqueKeyItem(self):
-        return urwid.Text([('selected_key', self.BibKey()), ('selected_hint', f"({self.Source()})")])
+    def OnSelectionHandler(self): pass
+
+    def _InitializeSearchPanelWidget(self):
+        if self._search_panel_widget is None:
+            self._search_panel_widget = BibEntry.SearchPanelWidgetImpl(self)
 
 class DblpEntry(BibEntry):
 
@@ -138,12 +161,12 @@ class DblpEntry(BibEntry):
         def __init__(self, entry):
             super().__init__([])
 
-            self.entry = entry
+            self._entry = entry
 
-            self.key_item = urwid.Columns([('pack', urwid.Text(('detail_key', "citation key: "))),
-                                           ('weight', 1, urwid.Text(('detail_value', entry.BibKey())))])
+            self.key_item = urwid.Columns([('pack', urwid.Text(('detail_key', "bibtex key: "))),
+                                           ('weight', 1, urwid.Text(('detail_value', entry.bibkey)))])
             self.source_item = urwid.Columns([('pack', urwid.Text(('detail_key', "source: "))),
-                                              ('weight', 1, urwid.Text(('detail_value', entry.Source())))])
+                                              ('weight', 1, urwid.Text(('detail_value', entry.source)))])
             self.person_items = urwid.Pile([
                 urwid.Columns([('pack', urwid.Text(('detail_key', f"{k.lower()}: "))),
                                ('weight', 1, urwid.Text(('detail_value', '\n'.join(entry.data['info']['authors'][k]))))])
@@ -162,45 +185,99 @@ class DblpEntry(BibEntry):
                              (self.info_items, ('pack', None)),
                              (urwid.SolidFill(), ('weight', 1))]
 
-    class FdWriteHandler:
-        def __init__(self, loop):
-            self.loop = loop
-
-        def __call__(self, data):
-            self.loop.draw_screen()
+            @property
+            def entry(self):
+                return self._entry
 
     def __init__(self, dblp_entry, repo):
         super().__init__('dblp.org', repo)
-        self.data = dblp_entry
-        self.details_widget = None
-        self.bib_key = None
+        self._data = dblp_entry
 
-        self.redraw_fd = None
+        self._details_widget = None
+        self._bibkey = None
+        self._redraw_fd = None
 
         self.pybtex_entry = None
         self.bibtex_loading_done = threading.Event()
 
         self.bibtex_loading_thread = threading.Thread(
-                name=f"bibtex-{self.BibKey()}",
-                target=self.LoadPybtexEntry,
+                name=f"bibtex-{self.bibkey}",
+                target=self._LoadPybtexEntry,
                 daemon=False)
 
-    def OnSelection(self):
-        if self.redraw_fd is None:
+    def __del__(self):
+        if self._redraw_fd is not None:
+            os.close(self._redraw_fd)
+    @property
+    def data(self):
+        return self._data
+
+    @property
+    def pyb_entry(self):
+        self.bibtex_loading_done.wait()
+        return self.pybtex_entry
+
+    @property
+    def authors(self):
+        try:
+            authors = self.data['info']['authors']['author']
+            if authors: return authors
+            else: return ["Unknown"]
+        except: return ["Unknown"]
+
+    @property
+    def title(self):
+        try: return str(self.data['info']['title'])
+        except: return "Unknown"
+
+    @property
+    def year(self):
+        try: return str(self.data['info']['year'])
+        except: return "Unknown"
+
+    @property
+    def venue(self):
+        try: return self.data['info']['venue']
+        except: return "Unknown"
+
+    @property
+    def bibkey(self):
+        if self._bibkey is None:
+            flat_key = self.data['info']['key']
+            base = flat_key.split('/')[-1]
+            sha1 = hashlib.sha1(flat_key.encode('utf-8')).hexdigest()
+            self._bibkey = f"{base}:{sha1[:4].upper()}"
+
+        return self._bibkey
+
+    @property
+    def details_widget(self):
+        self._InitializeDetailsWidget()
+        return self._details_widget
+
+    def OnSelectionHandler(self):
+        if self._redraw_fd is None:
             event_loop = self.repo.event_loop
-            self.redraw_fd = event_loop.watch_pipe(DblpEntry.FdWriteHandler(event_loop))
+            self._redraw_fd = event_loop.watch_pipe(self._FdWriteHandler)
             self.bibtex_loading_thread.start()
 
-    def LoadPybtexEntry(self):
+    def _FdWriteHandler(self, data):
+        self.repo.event_loop.draw_screen()
+
+    def _InitializeDetailsWidget(self):
+        if self._details_widget is None:
+            self._details_widget = DblpEntry.DetailsWidgetImpl(self)
+
+    def _LoadPybtexEntry(self):
         bib_url = f"https://dblp.org/rec/bib2/{self.data['info']['key']}.bib"
         try:
             if self.search_panel_widget is not None:
                 self.search_panel_widget.source.set_text([
-                    ('source', f"{self.Source()}"),
+                    ('source', f"{self.source}"),
                     ('delim', "::"),
-                    ('bibkey', f"{self.BibKey()}"),
+                    ('bibkey', f"{self.bibkey}"),
                     ('bibtex_fetching', " (fetching bibtex)")])
-                os.write(self.redraw_fd, b"?")
+                os.write(self._redraw_fd, b"?")
 
             with urllib.request.urlopen(bib_url) as remote:
                 bib_text = remote.read().decode('utf-8')
@@ -210,60 +287,17 @@ class DblpEntry(BibEntry):
 
             if self.search_panel_widget is not None:
                 self.search_panel_widget.source.set_text([
-                    ('source', f"{self.Source()}"),
+                    ('source', f"{self.source}"),
                     ('delim', "::"),
-                    ('bibkey', f"{self.BibKey()}"),
+                    ('bibkey', f"{self.bibkey}"),
                     ('bibtex_ready', " (bibtex ready)")])
-                os.write(self.redraw_fd, b"?")
+                os.write(self._redraw_fd, b"?")
 
         except Exception as e:
             logging.error(f"Error when fetching bibtex entry from DBLP: Entry: {self.data} {traceback.format_exc()}")
 
         self.bibtex_loading_done.set()
 
-    def ToPybEntry(self):
-        self.bibtex_loading_done.wait()
-        return self.pybtex_entry
-
-    def Authors(self):
-        try:
-            authors = self.data['info']['authors']['author']
-            if authors: return authors
-            else: return ["Unknown"]
-        except: return ["Unknown"]
-
-    def Title(self):
-        try: return str(self.data['info']['title'])
-        except: return "Unknown"
-
-    def Year(self):
-        try: return str(self.data['info']['year'])
-        except: return "Unknown"
-
-    def Venue(self):
-        try: return self.data['info']['venue']
-        except: return "Unknown"
-
-    def BibKey(self):
-        if self.bib_key is None:
-            flat_key = self.data['info']['key']
-            base = flat_key.split('/')[-1]
-            sha1 = hashlib.sha1(flat_key.encode('utf-8')).hexdigest()
-            self.bib_key = f"{base}:{sha1[:4].upper()}"
-
-        return self.bib_key
-
-    def InitializeDetailsWidget(self):
-        if self.details_widget is None:
-            self.details_widget = DblpEntry.DetailsWidgetImpl(self)
-
-    def DetailsWidget(self):
-        self.InitializeDetailsWidget()
-        return self.details_widget
-
-    def __del__(self):
-        if self.redraw_fd is not None:
-            os.close(self.redraw_fd)
 
 class BibtexEntry(BibEntry):
 
@@ -275,11 +309,11 @@ class BibtexEntry(BibEntry):
             self.entry = entry
             self.key = urwid.Columns([
                 ('pack', urwid.Text(('detail_key', "citation key: "))),
-                ('weight', 1, urwid.Text(('detail_value', entry.BibKey())))])
+                ('weight', 1, urwid.Text(('detail_value', entry.bibkey)))])
 
             self.source = urwid.Columns([
                 ('pack', urwid.Text(('detail_key', "source: "))),
-                ('weight', 1, urwid.Text(('detail_value', entry.Source())))])
+                ('weight', 1, urwid.Text(('detail_value', entry.source)))])
 
             self.item_type = urwid.Columns([
                 ('pack', urwid.Text(('detail_key', "type: "))),
@@ -306,24 +340,27 @@ class BibtexEntry(BibEntry):
 
     def __init__(self, key, entry, repo, source):
         super().__init__(source, repo)
-        self.key = key
+        self._bibkey = key
         self.entry = entry
-        self.repo = repo
-        self.details_widget = None
+        self._details_widget = None
 
-    def Authors(self):
+    @property
+    def authors(self):
         try: return [str(au) for au in self.entry.persons['author']]
         except: return ["Unknown"]
 
-    def Title(self):
+    @property
+    def title(self):
         try: return self.entry.fields['title']
         except: return "Unknown"
 
-    def Year(self):
+    @property
+    def year(self):
         try: return self.entry.fields['year']
         except: return "Unknown"
 
-    def Venue(self):
+    @property
+    def venue(self):
         try:
             if 'booktitle' in self.entry.fields:
                 return self.entry.fields['booktitle']
@@ -333,19 +370,22 @@ class BibtexEntry(BibEntry):
                 return f"Publisher: {self.entry.fields['publisher']}"
         except: return "Unknown"
 
-    def BibKey(self):
-        return self.key
+    @property
+    def bibkey(self):
+        return self._bibkey
 
-    def ToPybEntry(self):
+    @property
+    def pyb_entry(self):
         return self.entry
 
-    def InitializeDetailsWidget(self):
-        if self.details_widget is None:
-            self.details_widget = BibtexEntry.DetailsWidgetImpl(self)
+    @property
+    def details_widget(self):
+        self._InitializeDetailsWidget()
+        return self._details_widget
 
-    def DetailsWidget(self):
-        self.InitializeDetailsWidget()
-        return self.details_widget
+    def _InitializeDetailsWidget(self):
+        if self._details_widget is None:
+            self._details_widget = BibtexEntry.DetailsWidgetImpl(self)
 
 class BibRepo:
 
@@ -356,49 +396,51 @@ class BibRepo:
             super().__init__(urwid.SolidFill(), None)
             self.repo = repo
 
-            self.label = urwid.AttrMap(urwid.Text(f"{repo.source}"), "db_label")
-            self.status = urwid.AttrMap(urwid.Text(""), "db_label")
+            self._status = None
 
+            self.label = urwid.AttrMap(urwid.Text(f"{repo.source}"), "db_label")
+            self.status_indicator = urwid.AttrMap(urwid.Text(""), "db_label")
             self.original_widget = urwid.Columns([('pack', self.repo._short_label),
-                                                  ('pack', self.repo.enabled_mark),
+                                                  ('pack', self.repo._enabled_mark),
                                                   ('weight', 1, self.label),
-                                                  ('pack', self.status),
+                                                  ('pack', self.status_indicator),
                                                   ('pack', self.repo.extra_info)],
                                                  dividechars=1)
-        def UpdateStatus(self, status):
+        @property
+        def status(self):
+            return self._status
+
+        @status.setter
+        def status(self, value):
             with BibRepo.REDRAW_LOCK:
-                if self.repo.status == 'initialized':
-                    self.status.original_widget.set_text("initialized")
-                elif self.repo.status == 'loading':
-                    self.status.set_attr_map({None: "db_status_loading"})
-                    self.status.original_widget.set_text("loading")
-                elif self.repo.status == 'searching':
-                    self.status.set_attr_map({None: "db_status_searching"})
-                    self.status.original_widget.set_text("searching")
-                elif self.repo.status == 'ready':
-                    self.status.set_attr_map({None: "db_status_ready"})
-                    self.status.original_widget.set_text("ready")
-                    logging.debug(self.status)
+                self._status = value
+                if value == 'initialized':
+                    self.status_indicator.original_widget.set_text("initialized")
+                elif value == 'loading':
+                    self.status_indicator.set_attr_map({None: "db_status_loading"})
+                    self.status_indicator.original_widget.set_text("loading")
+                elif value == 'searching':
+                    self.status_indicator.set_attr_map({None: "db_status_searching"})
+                    self.status_indicator.original_widget.set_text("searching")
+                elif value == 'ready':
+                    self.status_indicator.set_attr_map({None: "db_status_ready"})
+                    self.status_indicator.original_widget.set_text("ready")
+                elif value == 'no file':
+                    self.status_indicator.set_attr_map({None: "db_status_error"})
+                    self.status_indicator.original_widget.set_text("no file")
                 else:
                     raise LookupError(f"Invalid status: {status}")
-
-    class FdWriteHandler:
-        def __init__(self, loop):
-            self.loop = loop
-
-        def __call__(self, data):
-            self.loop.draw_screen()
 
     def __init__(self, source, event_loop):
         self.source = source
 
         self.event_loop = event_loop
-        self.redraw_fd = event_loop.watch_pipe(BibRepo.FdWriteHandler(event_loop))
+        self._redraw_fd = event_loop.watch_pipe(self._FdWriteHandler)
 
         self.serial = 0
         self.serial_lock = threading.Lock()
 
-        self.search_result_sinks = []
+        self.search_results_panel = None
 
         self.loading_done = threading.Event()
         self.searching_done = threading.Event()
@@ -413,17 +455,19 @@ class BibRepo:
         self._short_label = urwid.Text("?")
 
         self.selected_entries_panel = None
-        self.status_indicator_widget = None
+        self._status_indicator_widget = None
 
+        self._enabled_mark = urwid.Text("")
         self.enabled = True
-        self.enabled_mark = urwid.Text("")
-        self.SetEnabled(True)
 
         self.extra_info = urwid.Text(('db_ro', "ro"))
 
-        self.SetStatus("initialized")
+        self.status = "initialized"
         self.loading_thread.start()
         self.searching_thread.start()
+
+    def __del__(self):
+        os.close(self._redraw_fd)
 
     @property
     def short_label(self):
@@ -433,18 +477,32 @@ class BibRepo:
     def short_label(self, value):
         self._short_label.set_text(value)
 
-    def Enabled(self):
-        return self.enabled
+    @property
+    def enabled(self):
+        return self._enabled
 
-    def SetEnabled(self, enabled):
-        self.enabled = enabled
-        if enabled:
-            self.enabled_mark.set_text(["[", ('db_enabled', "X"), "]"])
+    @enabled.setter
+    def enabled(self, value):
+        self._enabled = value
+        if self._enabled:
+            self._enabled_mark.set_text(["[", ('db_enabled', "X"), "]"])
         else:
-            self.enabled_mark.set_text("[ ]")
+            self._enabled_mark.set_text("[ ]")
 
-    def ToggleEnabled(self):
-        self.SetEnabled(not self.Enabled())
+    @property
+    def status(self):
+        self._InitializeStatusIndicatorWidget()
+        return self._status_indicator_widget.status
+
+    @status.setter
+    def status(self, value):
+        self._InitializeStatusIndicatorWidget()
+        self._status_indicator_widget.status = value
+
+    @property
+    def status_indicator_widget(self):
+        self._InitializeStatusIndicatorWidget()
+        return self._status_indicator_widget
 
     def Search(self, search_text, serial):
         self.search_text = search_text
@@ -452,30 +510,14 @@ class BibRepo:
             self.serial = serial
         self.searching_done.set()
 
-    def AttachSink(self, sink):
-        self.search_result_sinks.append(sink)
-
-    def SetStatus(self, status):
-        self.status = status
-        self.InitializeStatusIndicatorWidget()
-        self.status_indicator_widget.UpdateStatus(status)
-
-    def InitializeStatusIndicatorWidget(self):
-        if self.status_indicator_widget is None:
-            self.status_indicator_widget = BibRepo.StatusIndicatorWidgetImpl(self)
-
-    def StatusIndicatorWidget(self):
-        self.InitializeStatusIndicatorWidget()
-        return self.status_indicator_widget
-
     def LoadingThreadWrapper(self):
 
-        self.SetStatus("loading")
+        self.status = "loading"
         self.Redraw()
 
-        self.LoadingThreadMain()
+        status = self.LoadingThreadMain()
 
-        self.SetStatus("ready")
+        self.status = status
         self.Redraw()
 
         self.loading_done.set()
@@ -486,32 +528,33 @@ class BibRepo:
     def SearchingThreadWrapper(self):
 
         self.loading_done.wait()
-        logging.debug("Acknowledge loading completion.")
+        if self.status == 'no file':
+            return
+
         while True:
             self.searching_done.wait()
             with self.serial_lock:
                 serial = self.serial
 
-            logging.debug(f"Start searching: {self.search_text}")
-            self.SetStatus("searching")
+            self.status = "searching"
             self.Redraw()
 
             try:
                 for item in self.SearchingThreadMain(self.search_text):
 
-                    if item.BibKey() in self.selected_entries_panel.entries.keys():
-                        item.Mark('selected')
+                    if self.selected_entries_panel is not None and \
+                       item.bibkey in self.selected_entries_panel.entries.keys():
+                        item.mark = 'selected'
                     else:
-                        item.Mark(None)
+                        item.mark = None
 
-                    for sink in self.search_result_sinks:
-                        sink.Add(item, serial)
+                    if self.search_results_panel is not None:
+                        self.search_results_panel.Add(item, serial)
             except Exception as e:
                 logging.error(traceback.format_exc())
 
-            self.SetStatus("ready")
+            self.status = "ready"
             self.Redraw()
-            logging.debug(f"Done searching: {self.search_text}")
 
             with self.serial_lock:
                 if self.serial == serial:
@@ -520,16 +563,16 @@ class BibRepo:
     def Redraw(self):
         with BibRepo.REDRAW_LOCK:
             try:
-                os.write(self.redraw_fd, b"?")
-                logging.info(f"Wrote '?' to fd {self.redraw_fd}")
+                os.write(self._redraw_fd, b"?")
             except:
                 logging.error(traceback.format_exc())
 
-    def AttachPickedEntries(self, selected_entries_panel):
-        self.selected_entries_panel = selected_entries_panel
+    def _InitializeStatusIndicatorWidget(self):
+        if self._status_indicator_widget is None:
+            self._status_indicator_widget = BibRepo.StatusIndicatorWidgetImpl(self)
 
-    def __del__(self):
-        os.close(self.redraw_fd)
+    def _FdWriteHandler(self, data):
+        self.event_loop.draw_screen()
 
 class BibtexRepo(BibRepo):
     def __init__(self, glob_expr, event_loop):
@@ -540,12 +583,13 @@ class BibtexRepo(BibRepo):
         glob_expr = self.source
         logging.debug(f"Collecting entries from glob expression '{glob_expr}'")
 
-        self.bib_entries = []
         self.bib_files = glob.glob(glob_expr, recursive=True)
 
-        if not self.bib_entries:
+        if not self.bib_files:
             logging.warning(f"Glob expr '{glob_expr}' matches no target")
+            return 'no file'
 
+        self.bib_entries = []
         for path in self.bib_files:
 
             try:
@@ -558,6 +602,8 @@ class BibtexRepo(BibRepo):
                 self.bib_entries.append(BibtexEntry(key, entry, self, path))
 
             logging.debug(f"Parsed {len(bib_data.entries)} entries from file {path}")
+
+        return 'ready'
 
     def SearchingThreadMain(self, search_text):
         stripped = search_text.strip()
@@ -580,17 +626,14 @@ class OutputBibtexRepo(BibtexRepo):
         self.extra_info.set_text(('db_rw', "rw"))
         self.output_file = self.bib_files[0] if self.bib_files else glob_expr
 
-    def AttachSelectedKeys(self, selected_keys_panel):
-        self.selected_keys_panel = selected_keys_panel
-
     def Write(self):
         if self.selected_keys_panel is None:
             return
 
         self.loading_done.wait()
 
-        entries = {e.BibKey(): e.ToPybEntry() for e in self.bib_entries}
-        entries.update({e.BibKey(): e.ToPybEntry() for e in selected_keys_panel.entries.values()})
+        entries = {e.bibkey: e.pyb_entry for e in self.bib_entries}
+        entries.update({e.bibkey: e.pyb_entry for e in selected_keys_panel.entries.values()})
 
         for key, entry in entries.items():
             if entry is None:
@@ -605,7 +648,7 @@ class DblpRepo(BibRepo):
         super().__init__("http://dblp.org", event_loop)
 
     def LoadingThreadMain(self):
-        pass
+        return 'ready'
 
     def SearchingThreadMain(self, search_text):
         stripped = search_text.strip()
@@ -613,8 +656,6 @@ class DblpRepo(BibRepo):
             return
 
         url = f"http://dblp.org/search/publ/api?q={urllib.parse.quote(search_text)}&format=json"
-        logging.debug(f"search_text: '{search_text}'")
-        logging.debug(f"url: '{url}'")
         with urllib.request.urlopen(url) as response:
             bib_data = json.load(response)
 
@@ -643,31 +684,36 @@ class Banner(urwid.AttrMap):
 class SearchResultsPanel(urwid.AttrMap):
     def __init__(self):
         super().__init__(urwid.SolidFill(), None)
-        self.serial = 0
+        self._serial = 0
         self.serial_lock = threading.Lock()
 
         self.banner = Banner()
 
-        self.Clear()
+        self._Clear()
 
-    def Clear(self):
+    @property
+    def serial(self):
+        return self._serial
+
+    @serial.setter
+    def serial(self, value):
+        with self.serial_lock:
+            self._serial = value
+            self._Clear()
+
+    def _Clear(self):
         self.items = []
         self.SyncDisplay()
 
-    def SetSerial(self, serial):
-        with self.serial_lock:
-            self.serial = serial
-            self.Clear()
-
     def Add(self, entry, serial):
         with self.serial_lock:
-            if self.serial == serial:
-                self.items.append(entry.SearchPanelWidget())
+            if self._serial == serial:
+                self.items.append(entry.search_panel_widget)
                 self.SyncDisplay()
 
     def SyncDisplay(self):
 
-        enabled_items = [item for item in self.items if item.entry.repo.Enabled()]
+        enabled_items = [item for item in self.items if item.entry.repo.enabled]
         if enabled_items:
             self.list_walker = urwid.SimpleListWalker(enabled_items)
             self.original_widget = urwid.ListBox(self.list_walker)
@@ -690,22 +736,22 @@ class SelectedKeysPanel(urwid.Pile):
         self.SyncDisplay()
 
     def Toggle(self, entry):
-        key = entry.UniqueKey()
+        key = entry.unique_key
         if key in self.entries:
             del self.entries[key]
-            entry.Mark(None)
+            entry.mark = None
         else:
             self.entries[key] = entry
-            entry.Mark('selected')
+            entry.mark = 'selected'
 
         self.SyncDisplay()
 
     def Add(self, entry):
-        self.entries[entry.UniqueKey()] = entry
+        self.entries[entry.unique_key] = entry
         self.SyncDisplay()
 
     def SyncDisplay(self):
-        new_contents = [(ent.UniqueKeyItem(), ('pack', None)) for ent in self.entries.values()]
+        new_contents = [(ent.unique_key_item, ('pack', None)) for ent in self.entries.values()]
         if not new_contents:
             new_contents = [(urwid.Text(('selected_hint', "Hit <SPACE> on highlighted item to select.")), ('pack', None))]
 
@@ -727,9 +773,10 @@ palette = [('search_label', 'yellow', 'dark magenta'),
            ('db_label', 'default', 'default'),
            ('db_enabled', 'light cyan', 'default'),
            ('db_status_ready', 'light green', 'default'),
-           ('db_status_loading', 'light red', 'default'),
+           ('db_status_loading', 'light cyan', 'default'),
            ('db_status_searching', 'yellow', 'default'),
-           ('db_rw', 'light red', 'default'),
+           ('db_status_error', 'light red', 'default'),
+           ('db_rw', 'light magenta', 'default'),
            ('db_ro', 'light green', 'default'),
 
            ('mark_none', 'default', 'dark gray'),
@@ -773,27 +820,34 @@ class SearchBar(urwid.AttrMap):
     def __init__(self):
         super().__init__(urwid.SolidFill(), 'search_content')
 
-        self.search = urwid.Edit(('search_label', "Search: "))
+        self._search = urwid.Edit(('search_label', "Search: "))
 
-        self.original_widget = self.search
+        self.original_widget = self._search
 
-        self.search_panel = None
-        self.search_serial = 0
+        self.search_results_panel = None
+        self._search_serial = 0
         self.bib_repos = []
 
+        urwid.connect_signal(self._search, 'change', self.TextChangeHandler)
+
     def TextChangeHandler(self, edit, text):
-        search_results_panel.SetSerial(self.search_serial)
+        if self.search_results_panel is None:
+            return
+
+        self.search_results_panel.serial = self._search_serial
         for repo in self.bib_repos:
-            repo.Search(text, self.search_serial)
+            repo.Search(text, self._search_serial)
 
-        self.search_serial += 1
+        self._search_serial += 1
 
-    def SetActiveRepos(self, repos):
-        self.bib_repos = repos
+class MessageBar(urwid.AttrMap):
+    def __init__(self):
+        super().__init__(urwid.Text("Message"), 'message_bar')
 
-    def AttachSearchPanel(self, search_panel):
-        self.search_panel = search_panel
-        urwid.connect_signal(self.search, 'change', self.TextChangeHandler)
+class DetailsPanel(urwid.AttrMap):
+    def __init__(self):
+        super().__init__(urwid.Filler(urwid.Text(
+            ('details_hint', 'Hit <i> on highlighted item to update info.')), 'top'), None)
 
 class InputFilter:
     def __call__(self, keys, raw):
@@ -817,17 +871,17 @@ class InputFilter:
             symbol = key[5:]
             if symbol == '~':
                 for repo in bib_repos:
-                    repo.SetEnabled(True)
+                    repo.enabled = True
             else:
                 number = symbol_number_map.get(symbol)
                 if number == 0:
                     for repo in bib_repos:
-                        repo.SetEnabled(False)
+                        repo.enabled = False
 
                 else:
                     try:
                         repo = bib_repos[number - 1]
-                        repo.ToggleEnabled()
+                        repo.enabled = not repo.enabled
 
                     except: pass
             return True
@@ -852,22 +906,17 @@ bib_repos = [DblpRepo(main_loop)] \
 for repo, i in zip(bib_repos, itertools.count(1)):
     repo.short_label = f"{i}"
 
-message_bar = urwid.Text(('message_bar', "Message"))
-
+message_bar = MessageBar()
 search_results_panel = SearchResultsPanel()
-
-search_bar = SearchBar()
-search_bar.SetActiveRepos(bib_repos)
-search_bar.AttachSearchPanel(search_results_panel)
-
-db_status_panel = urwid.Pile([repo.StatusIndicatorWidget() for repo in bib_repos])
-
-details_panel = urwid.AttrMap(urwid.Filler(urwid.Text(
-    ('details_hint', 'Hit <i> on highlighted item to update info.')), 'top'), None)
-
+details_panel = DetailsPanel()
 selected_keys_panel = SelectedKeysPanel()
 
-output_repo.AttachSelectedKeys(selected_keys_panel)
+search_bar = SearchBar()
+search_bar.bib_repos = bib_repos
+search_bar.search_results_panel = search_results_panel
+
+db_status_panel = urwid.Pile([repo.status_indicator_widget for repo in bib_repos])
+output_repo.selected_keys_panel = selected_keys_panel
 
 right_panel = urwid.Pile([('pack', urwid.LineBox(db_status_panel, title="Database Info")),
                           ('weight', 5, urwid.LineBox(details_panel, title="Detailed Info")),
@@ -878,11 +927,11 @@ main_widget = urwid.Columns([('weight', 2, urwid.LineBox(search_results_panel, t
 
 top_widget = urwid.Pile([('pack', search_bar),
                          ('weight', 1, main_widget),
-                         ('pack', urwid.AttrMap(message_bar, 'message_bar'))])
+                         ('pack', message_bar)])
 
 for repo in bib_repos:
-    repo.AttachSink(search_results_panel)
-    repo.AttachPickedEntries(selected_keys_panel)
+    repo.search_results_panel = search_results_panel
+    repo.selected_keys_panel = selected_keys_panel
 
 main_loop.widget = top_widget
 main_loop.run()
