@@ -623,12 +623,30 @@ class DblpRepo(BibRepo):
             for entry in bib_data['result']['hits']['hit']:
                 yield DblpEntry(entry, self)
 
+class Banner(urwid.AttrMap):
+    def __init__(self):
+        super().__init__(urwid.SolidFill(), None)
+        self.big_text = urwid.BigText([('banner_hi', "bib"),
+                                       ('banner_lo', "rarian")],
+                                      urwid.font.HalfBlock7x7Font())
+
+        self.big_text_clipped = urwid.Padding(self.big_text, 'center', width='clip')
+
+        self.subtitle = urwid.Text(('banner_hi', "A BibTeX Management Tool Powered By D.B.L.P"), align='center')
+        self.version = urwid.Text(('banner_lo', "version 1.0"), align='center')
+
+        self.original_widget = urwid.Filler(
+                urwid.Pile([self.big_text_clipped, self.subtitle, self.version]),
+                'middle')
+
 class SearchResultsPanel(urwid.AttrMap):
     def __init__(self):
         super().__init__(urwid.SolidFill(), None)
         self.serial = 0
         self.serial_lock = threading.Lock()
-        self.picked_pool = None
+
+        self.banner = Banner()
+
         self.Clear()
 
     def Clear(self):
@@ -647,9 +665,14 @@ class SearchResultsPanel(urwid.AttrMap):
                 self.SyncDisplay()
 
     def SyncDisplay(self):
-        self.list_walker = urwid.SimpleListWalker([
-            item for item in self.items if item.entry.repo.Enabled()])
-        self.original_widget = urwid.ListBox(self.list_walker)
+
+        enabled_items = [item for item in self.items if item.entry.repo.Enabled()]
+        if enabled_items:
+            self.list_walker = urwid.SimpleListWalker(enabled_items)
+            self.original_widget = urwid.ListBox(self.list_walker)
+
+        else:
+            self.original_widget = self.banner
 
     def keypress(self, size, key):
         if key == 'ctrl n':
@@ -740,6 +763,9 @@ palette = [('search_label', 'yellow', 'dark magenta'),
 
            ('detail_key', 'light green', 'default'),
            ('detail_value', 'default', 'default'),
+
+           ('banner_hi', 'light magenta', 'default'),
+           ('banner_lo', 'dark magenta', 'default'),
            ]
 
 class SearchBar(urwid.AttrMap):
