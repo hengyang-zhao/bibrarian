@@ -389,8 +389,6 @@ class BibtexEntry(BibEntry):
 
 class BibRepo:
 
-    REDRAW_LOCK = threading.Lock()
-
     class StatusIndicatorWidgetImpl(urwid.AttrMap):
         def __init__(self, repo):
             super().__init__(urwid.SolidFill(), None)
@@ -399,12 +397,13 @@ class BibRepo:
             self._status = None
 
             self.label = urwid.AttrMap(urwid.Text(f"{repo.source}"), "db_label")
+            self.access = urwid.Text("")
             self.status_indicator = urwid.AttrMap(urwid.Text(""), "db_label")
             self.original_widget = urwid.Columns([('pack', self.repo._short_label),
                                                   ('pack', self.repo._enabled_mark),
                                                   ('weight', 1, self.label),
                                                   ('pack', self.status_indicator),
-                                                  ('pack', self.repo.extra_info)],
+                                                  ('pack', self.access)],
                                                  dividechars=1)
         @property
         def status(self):
@@ -412,7 +411,7 @@ class BibRepo:
 
         @status.setter
         def status(self, value):
-            with BibRepo.REDRAW_LOCK:
+            with self.repo.redraw_lock:
                 self._status = value
                 if value == 'initialized':
                     self.status_indicator.original_widget.set_text("initialized")
@@ -434,13 +433,16 @@ class BibRepo:
     def __init__(self, source, event_loop):
         self.source = source
 
+        self.redraw_lock = threading.Lock()
+
         self.event_loop = event_loop
         self._redraw_fd = event_loop.watch_pipe(self._FdWriteHandler)
 
         self.serial = 0
-        self.serial_lock = threading.Lock()
+        self._serial_lock = threading.Lock()
 
         self.search_results_panel = None
+        self.message_bar = None
 
         self.loading_done = threading.Event()
         self.searching_done = threading.Event()
@@ -453,16 +455,15 @@ class BibRepo:
                                                  target=self.SearchingThreadWrapper,
                                                  daemon=True)
         self._short_label = urwid.Text("?")
-
-        self.selected_entries_panel = None
-        self._status_indicator_widget = None
-
         self._enabled_mark = urwid.Text("")
         self.enabled = True
 
-        self.extra_info = urwid.Text(('db_ro', "ro"))
+        self.selected_entries_panel = None
+        self._status_indicator_widget = BibRepo.StatusIndicatorWidgetImpl(self)
 
+        self.access_type = 'ro'
         self.status = "initialized"
+
         self.loading_thread.start()
         self.searching_thread.start()
 
@@ -478,6 +479,21 @@ class BibRepo:
         self._short_label.set_text(value)
 
     @property
+    def access_type(self):
+        return self._access_type
+
+    @access_type.setter
+    def access_type(self, value):
+        if value == 'ro':
+            self._access_type = 'ro'
+            self._status_indicator_widget.access.set_text(('db_ro', "ro"))
+        elif value == 'rw':
+            self._access_type = 'rw'
+            self._status_indicator_widget.access.set_text(('db_rw', "rw"))
+        else:
+            raise ValueError(f"Invalid access info: {value}")
+
+    @property
     def enabled(self):
         return self._enabled
 
@@ -491,22 +507,19 @@ class BibRepo:
 
     @property
     def status(self):
-        self._InitializeStatusIndicatorWidget()
         return self._status_indicator_widget.status
 
     @status.setter
     def status(self, value):
-        self._InitializeStatusIndicatorWidget()
         self._status_indicator_widget.status = value
 
     @property
     def status_indicator_widget(self):
-        self._InitializeStatusIndicatorWidget()
         return self._status_indicator_widget
 
     def Search(self, search_text, serial):
         self.search_text = search_text
-        with self.serial_lock:
+        with self._serial_lock:
             self.serial = serial
         self.searching_done.set()
 
@@ -533,7 +546,7 @@ class BibRepo:
 
         while True:
             self.searching_done.wait()
-            with self.serial_lock:
+            with self._serial_lock:
                 serial = self.serial
 
             self.status = "searching"
@@ -556,20 +569,16 @@ class BibRepo:
             self.status = "ready"
             self.Redraw()
 
-            with self.serial_lock:
+            with self._serial_lock:
                 if self.serial == serial:
                     self.searching_done.clear()
 
     def Redraw(self):
-        with BibRepo.REDRAW_LOCK:
+        with self.redraw_lock:
             try:
                 os.write(self._redraw_fd, b"?")
             except:
                 logging.error(traceback.format_exc())
-
-    def _InitializeStatusIndicatorWidget(self):
-        if self._status_indicator_widget is None:
-            self._status_indicator_widget = BibRepo.StatusIndicatorWidgetImpl(self)
 
     def _FdWriteHandler(self, data):
         self.event_loop.draw_screen()
@@ -587,6 +596,8 @@ class BibtexRepo(BibRepo):
 
         if not self.bib_files:
             logging.warning(f"Glob expr '{glob_expr}' matches no target")
+            message_bar.Post(f"Glob expr '{glob_expr}' matches no target.",
+                             'warning')
             return 'no file'
 
         self.bib_entries = []
@@ -623,7 +634,7 @@ class OutputBibtexRepo(BibtexRepo):
         if len(self.bib_files) > 1:
             raise ValueError(f"Glob expr '{glob_expr}' matches more than one file")
 
-        self.extra_info.set_text(('db_rw', "rw"))
+        self.access_type = 'rw'
         self.output_file = self.bib_files[0] if self.bib_files else glob_expr
 
     def Write(self):
@@ -685,7 +696,7 @@ class SearchResultsPanel(urwid.AttrMap):
     def __init__(self):
         super().__init__(urwid.SolidFill(), None)
         self._serial = 0
-        self.serial_lock = threading.Lock()
+        self._serial_lock = threading.Lock()
 
         self.banner = Banner()
 
@@ -697,7 +708,7 @@ class SearchResultsPanel(urwid.AttrMap):
 
     @serial.setter
     def serial(self, value):
-        with self.serial_lock:
+        with self._serial_lock:
             self._serial = value
             self._Clear()
 
@@ -706,7 +717,7 @@ class SearchResultsPanel(urwid.AttrMap):
         self.SyncDisplay()
 
     def Add(self, entry, serial):
-        with self.serial_lock:
+        with self._serial_lock:
             if self._serial == serial:
                 self.items.append(entry.search_panel_widget)
                 self.SyncDisplay()
@@ -722,9 +733,9 @@ class SearchResultsPanel(urwid.AttrMap):
             self.original_widget = self.banner
 
     def keypress(self, size, key):
-        if key == 'ctrl n':
+        if key in ('ctrl n', 'j'):
             self.original_widget._keypress_down(size)
-        elif key == 'ctrl p':
+        elif key in ('ctrl p', 'k'):
             self.original_widget._keypress_up(size)
         else:
             self.original_widget.keypress(size, key)
@@ -757,6 +768,152 @@ class SelectedKeysPanel(urwid.Pile):
 
         self.contents = new_contents
 
+class SearchBar(urwid.AttrMap):
+    def __init__(self):
+        super().__init__(urwid.SolidFill(), 'search_content')
+
+        self._search = urwid.Edit(('search_label', "Search: "))
+
+        self.original_widget = self._search
+
+        self.search_results_panel = None
+        self._search_serial = 0
+        self.bib_repos = []
+
+        urwid.connect_signal(self._search, 'change', self.TextChangeHandler)
+
+    def TextChangeHandler(self, edit, text):
+        if self.search_results_panel is None:
+            return
+
+        self.search_results_panel.serial = self._search_serial
+        for repo in self.bib_repos:
+            repo.Search(text, self._search_serial)
+
+        self._search_serial += 1
+
+class MessageBar(urwid.AttrMap):
+    def __init__(self, loop):
+        super().__init__(urwid.Text(""), 'msg_normal')
+
+        self.event_loop = loop
+        self._redraw_fd = loop.watch_pipe(self._FdWriteHandler)
+
+        self.post_delay = 6
+        self.tips_delay = 4
+        self.next_message_ready = threading.Event()
+
+        self.next_message_scheduled = 0
+
+        self.tips = [
+                "Use ctrl+c to exit the program with all files untouched.",
+                "Use ctrl+w to write the selected entries to the target file.",
+                "Use up (or ctrl+p or k) and down (or ctrl+n or j) to navigate the search results.",
+                "Use alt+shift+n to toggle enabled/disabled the n-th bib repo.",
+                "This software is powered by Python 3, dblp API, Pybtex, and urwid.",
+        ]
+
+        self.msg_lock = threading.Lock()
+
+        self.periodic_trigger_thread = threading.Thread(
+                name=f"msg-trigger", target=self._PeriodicTrigger, daemon=True)
+
+        self.message_update_thread = threading.Thread(
+                name=f"msg-update", target=self._UpdateMessage, daemon=True)
+
+        self.periodic_trigger_thread.start()
+        self.message_update_thread.start()
+
+    def Post(self, message, severity='normal'):
+        if severity == 'normal':
+            label = "Message"
+            style = 'msg_normal'
+        elif severity == 'warning':
+            label = "Warning"
+            style = 'msg_warning'
+        elif severity == 'error':
+            label = "Error"
+            style = 'msg_error'
+        else:
+            raise ValueError(f"Invalid severity: {severity}")
+
+        with self.msg_lock:
+            self.original_widget = urwid.Text((style, f"{label}: {message}"))
+            self.next_message_ready.set()
+            self.next_message_scheduled = time.time() + self.post_delay
+
+    def _FdWriteHandler(self, data):
+        self.event_loop.draw_screen()
+
+    def _PeriodicTrigger(self):
+        while True:
+            for message in self.tips:
+                while True:
+                    if time.time() >= self.next_message_scheduled:
+                        with self.msg_lock:
+                            self.original_widget = urwid.Text(('msg_tips', f"Tip: {message}"))
+                            self.next_message_ready.set()
+                            self.next_message_scheduled = time.time() + self.tips_delay
+                        time.sleep(self.tips_delay)
+                        break
+                    else:
+                        time.sleep(1)
+                        continue
+
+    def _UpdateMessage(self):
+        while True:
+            self.next_message_ready.wait()
+            self.next_message_ready.clear()
+            os.write(self._redraw_fd, b"?")
+
+    def __del__(self):
+        os.close(self._redraw_fd)
+
+class DetailsPanel(urwid.AttrMap):
+    def __init__(self):
+        super().__init__(urwid.Filler(urwid.Text(
+            ('details_hint', 'Hit <i> on highlighted item to update info.')), 'top'), None)
+
+class InputFilter:
+    def __call__(self, keys, raw):
+        if not keys: return keys
+
+        if keys[0] == 'ctrl w':
+            try: output_repo.Write()
+            except:
+                logging.error(traceback.format_exc())
+            raise urwid.ExitMainLoop()
+        elif self.MaskDatabases(keys[0]):
+            search_results_panel.SyncDisplay()
+            return
+
+        return keys
+
+    def MaskDatabases(self, key):
+        symbol_number_map = {s: n for s, n in zip(")!@#$%^&*(", range(10))}
+        if 'meta ' in key:
+            symbol = key[5:]
+            if symbol == '~':
+                for repo in bib_repos:
+                    repo.enabled = True
+            else:
+                number = symbol_number_map.get(symbol)
+                if number == 0:
+                    for repo in bib_repos:
+                        repo.enabled = False
+
+                else:
+                    try:
+                        repo = bib_repos[number - 1]
+                        repo.enabled = not repo.enabled
+
+                    except: pass
+            return True
+        elif key == 'enter':
+            top_widget.focus_position = 1 - top_widget.focus_position
+        else:
+            return False
+
 logging.basicConfig(filename=f"/tmp/{getpass.getuser()}_babrarian.log",
                     format="[%(asctime)s %(levelname)7s] %(threadName)s: %(message)s",
                     datefmt="%m-%d-%Y %H:%M:%S",
@@ -766,7 +923,10 @@ palette = [('search_label', 'yellow', 'dark magenta'),
            ('search_content', 'white', 'dark magenta'),
            ('search_hint', 'light cyan', 'dark magenta'),
 
-           ('message_bar', 'white', 'dark gray'),
+           ('msg_tips', 'white', 'dark gray'),
+           ('msg_normal', 'light green', 'dark gray'),
+           ('msg_warning', 'yellow', 'dark gray'),
+           ('msg_error', 'light red', 'dark gray'),
 
            ('details_hint', 'dark green', 'default'),
 
@@ -816,83 +976,14 @@ palette = [('search_label', 'yellow', 'dark magenta'),
            ('banner_lo', 'dark magenta', 'default'),
            ]
 
-class SearchBar(urwid.AttrMap):
-    def __init__(self):
-        super().__init__(urwid.SolidFill(), 'search_content')
-
-        self._search = urwid.Edit(('search_label', "Search: "))
-
-        self.original_widget = self._search
-
-        self.search_results_panel = None
-        self._search_serial = 0
-        self.bib_repos = []
-
-        urwid.connect_signal(self._search, 'change', self.TextChangeHandler)
-
-    def TextChangeHandler(self, edit, text):
-        if self.search_results_panel is None:
-            return
-
-        self.search_results_panel.serial = self._search_serial
-        for repo in self.bib_repos:
-            repo.Search(text, self._search_serial)
-
-        self._search_serial += 1
-
-class MessageBar(urwid.AttrMap):
-    def __init__(self):
-        super().__init__(urwid.Text("Message"), 'message_bar')
-
-class DetailsPanel(urwid.AttrMap):
-    def __init__(self):
-        super().__init__(urwid.Filler(urwid.Text(
-            ('details_hint', 'Hit <i> on highlighted item to update info.')), 'top'), None)
-
-class InputFilter:
-    def __call__(self, keys, raw):
-        if not keys: return keys
-
-        if keys[0] == 'ctrl w':
-            try: output_repo.Write()
-            except:
-                logging.error(traceback.format_exc())
-            raise urwid.ExitMainLoop()
-
-        if self.MaskDatabases(keys[0]):
-            search_results_panel.SyncDisplay()
-            return
-
-        return keys
-
-    def MaskDatabases(self, key):
-        symbol_number_map = {s: n for s, n in zip(")!@#$%^&*(", range(10))}
-        if 'meta ' in key:
-            symbol = key[5:]
-            if symbol == '~':
-                for repo in bib_repos:
-                    repo.enabled = True
-            else:
-                number = symbol_number_map.get(symbol)
-                if number == 0:
-                    for repo in bib_repos:
-                        repo.enabled = False
-
-                else:
-                    try:
-                        repo = bib_repos[number - 1]
-                        repo.enabled = not repo.enabled
-
-                    except: pass
-            return True
-        elif key == 'enter':
-            top_widget.focus_position = 1 - top_widget.focus_position
-        else:
-            return False
-
 main_loop = urwid.MainLoop(urwid.SolidFill(),
                            palette=palette,
                            input_filter=InputFilter())
+
+message_bar = MessageBar(main_loop)
+search_results_panel = SearchResultsPanel()
+details_panel = DetailsPanel()
+selected_keys_panel = SelectedKeysPanel()
 
 with open("config.json") as config_file:
     config = json.load(config_file)
@@ -905,11 +996,9 @@ bib_repos = [DblpRepo(main_loop)] \
 
 for repo, i in zip(bib_repos, itertools.count(1)):
     repo.short_label = f"{i}"
-
-message_bar = MessageBar()
-search_results_panel = SearchResultsPanel()
-details_panel = DetailsPanel()
-selected_keys_panel = SelectedKeysPanel()
+    repo.message_bar = message_bar
+    repo.search_results_panel = search_results_panel
+    repo.selected_keys_panel = selected_keys_panel
 
 search_bar = SearchBar()
 search_bar.bib_repos = bib_repos
@@ -929,10 +1018,9 @@ top_widget = urwid.Pile([('pack', search_bar),
                          ('weight', 1, main_widget),
                          ('pack', message_bar)])
 
-for repo in bib_repos:
-    repo.search_results_panel = search_results_panel
-    repo.selected_keys_panel = selected_keys_panel
-
 main_loop.widget = top_widget
-main_loop.run()
+
+try: main_loop.run()
+except KeyboardInterrupt:
+    sys.exit(0)
 
