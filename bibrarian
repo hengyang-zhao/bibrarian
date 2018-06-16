@@ -2,4 +2,4 @@
 
 SCRIPT_DIR="$(builtin cd "$(dirname "$0")"; builtin pwd)"
 
-python3 $SCRIPT_DIR/Bibrarian.py
+python3 $SCRIPT_DIR/Main.py
