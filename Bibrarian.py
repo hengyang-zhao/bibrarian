@@ -831,8 +831,8 @@ class MessageBar(urwid.AttrMap):
         self._redraw_fd = loop.watch_pipe(self._FdWriteHandler)
 
         self.initial_delay = 1
-        self.post_delay = 6
-        self.tips_delay = 4
+        self.post_delay = 3
+        self.tips_delay = 5
         self.next_message_ready = threading.Event()
 
         self.next_message_scheduled = 0
