@@ -617,6 +617,7 @@ class BibtexRepo(BibRepo):
     def __init__(self, glob_expr, event_loop):
         super().__init__(glob_expr, event_loop)
         self.bib_files = []
+        self.bib_entries = []
 
     def LoadingThreadMain(self):
         glob_expr = self.source
@@ -631,7 +632,6 @@ class BibtexRepo(BibRepo):
                                       'warning')
             return 'no file'
 
-        self.bib_entries = []
         for path in self.bib_files:
 
             try:
@@ -675,7 +675,7 @@ class OutputBibtexRepo(BibtexRepo):
         self.loading_done.wait()
 
         entries = {e.bibkey: e.pyb_entry for e in self.bib_entries}
-        entries.update({e.bibkey: e.pyb_entry for e in selected_keys_panel.entries.values()})
+        entries.update({e.bibkey: e.pyb_entry for e in self.selected_keys_panel.entries.values()})
 
         for key, entry in entries.items():
             if entry is None:
