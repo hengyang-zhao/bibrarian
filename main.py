@@ -1,3 +1,4 @@
+import argparse
 import getpass
 import glob
 import hashlib
@@ -418,6 +419,18 @@ class BibtexEntry(BibEntry):
 
 class BibRepo:
 
+    @staticmethod
+    def Create(config, access, event_loop):
+        enabled = config.get('enabled', True)
+        if 'remote' in config:
+            return DblpRepo(event_loop, enabled)
+
+        elif 'glob' in config:
+            ctor = {'ro': BibtexRepo, 'rw': OutputBibtexRepo}[access]
+            return ctor(config['glob'], event_loop, enabled)
+        else:
+            raise ValueError(f"Invalid config: {config}")
+
     class StatusIndicatorWidgetImpl(urwid.AttrMap):
         def __init__(self, repo):
             super().__init__(urwid.SolidFill(), None)
@@ -459,7 +472,7 @@ class BibRepo:
                 else:
                     raise LookupError(f"Invalid status: {status}")
 
-    def __init__(self, source, event_loop):
+    def __init__(self, source, event_loop, enabled):
         self.source = source
 
         self.redraw_lock = threading.Lock()
@@ -487,7 +500,7 @@ class BibRepo:
                                                  daemon=True)
         self._short_label = urwid.Text("?")
         self._enabled_mark = urwid.Text("")
-        self.enabled = True
+        self.enabled = enabled
 
         self._status_indicator_widget = BibRepo.StatusIndicatorWidgetImpl(self)
 
@@ -614,8 +627,8 @@ class BibRepo:
         self.event_loop.draw_screen()
 
 class BibtexRepo(BibRepo):
-    def __init__(self, glob_expr, event_loop):
-        super().__init__(glob_expr, event_loop)
+    def __init__(self, glob_expr, event_loop, enabled):
+        super().__init__(glob_expr, event_loop, enabled)
         self.bib_files = []
         self.bib_entries = []
 
@@ -658,8 +671,8 @@ class BibtexRepo(BibRepo):
                 yield entry
 
 class OutputBibtexRepo(BibtexRepo):
-    def __init__(self, glob_expr, event_loop):
-        super().__init__(glob_expr, event_loop)
+    def __init__(self, glob_expr, event_loop, enabled):
+        super().__init__(glob_expr, event_loop, enabled)
         self.selected_keys_panel = None
 
         if len(self.bib_files) > 1:
@@ -686,8 +699,8 @@ class OutputBibtexRepo(BibtexRepo):
         logging.info(f"Wrote to file '{self.output_file}'")
 
 class DblpRepo(BibRepo):
-    def __init__(self, event_loop):
-        super().__init__("http://dblp.org", event_loop)
+    def __init__(self, event_loop, enabled):
+        super().__init__("https://dblp.org", event_loop, enabled)
 
     def LoadingThreadMain(self):
         return 'ready'
@@ -697,7 +710,7 @@ class DblpRepo(BibRepo):
         if not stripped:
             return
 
-        url = f"http://dblp.org/search/publ/api?q={urllib.parse.quote(search_text)}&format=json"
+        url = f"https://dblp.org/search/publ/api?q={urllib.parse.quote(search_text)}&format=json"
         with urllib.request.urlopen(url) as response:
             bib_data = json.load(response)
 
@@ -772,9 +785,10 @@ class SearchResultsPanel(urwid.AttrMap):
             self.original_widget.keypress(size, key)
 
 class SelectedKeysPanel(urwid.Pile):
-    def __init__(self, *args, **kwargs):
-        super().__init__([], **kwargs)
+    def __init__(self, keys_output):
+        super().__init__([])
         self.entries = {}
+        self.keys_output = keys_output
         self.SyncDisplay()
 
     def Toggle(self, entry):
@@ -798,6 +812,13 @@ class SelectedKeysPanel(urwid.Pile):
             new_contents = [(urwid.Text(('selected_hint', "Hit <SPACE> on highlighted item to select.")), ('pack', None))]
 
         self.contents = new_contents
+
+    def Write(self):
+        if self.keys_output is None: return
+
+        with open(self.keys_output, 'w') as f:
+            print(','.join(map(lambda e: e.bibkey, self.entries.values())), file=f)
+            logging.info(f"Wrote selected keys to file '{self.keys_output}'")
 
 class SearchBar(urwid.AttrMap):
     def __init__(self):
@@ -918,10 +939,17 @@ class InputFilter:
         if not keys: return keys
 
         if keys[0] == 'ctrl w':
-            try: self.widget.output_repo.Write()
+            try:
+                for repo in self.widget.output_repos:
+                    repo.Write()
             except:
                 logging.error(traceback.format_exc())
+
+            try: self.widget.selected_keys_panel.Write()
+            except: logging.error(traceback.format_exc())
+
             raise urwid.ExitMainLoop()
+
         elif self.MaskDatabases(keys[0]):
             self.widget.search_results_panel.SyncDisplay()
             return
@@ -953,19 +981,17 @@ class InputFilter:
             return False
 
 class TopWidget(urwid.Pile):
-    def __init__(self, config, event_loop):
+    def __init__(self, args, config, event_loop):
         super().__init__([urwid.SolidFill()])
 
         self.message_bar = MessageBar(event_loop)
         self.search_results_panel = SearchResultsPanel()
         self.details_panel = DetailsPanel()
-        self.selected_keys_panel = SelectedKeysPanel()
+        self.selected_keys_panel = SelectedKeysPanel(args.keys_output)
 
-        self.output_repo = OutputBibtexRepo(config['bib_output'], event_loop)
+        self.output_repos = [BibRepo.Create(cfg, 'rw', event_loop) for cfg in config['rw_repos']]
 
-        self.bib_repos = [DblpRepo(event_loop)] \
-                + [BibtexRepo(bib, event_loop) for bib in config['bib_files']] \
-                + [self.output_repo]
+        self.bib_repos = [BibRepo.Create(cfg, 'ro', event_loop) for cfg in config['ro_repos']] + self.output_repos
 
         for repo, i in zip(self.bib_repos, itertools.count(1)):
             repo.short_label = f"{i}"
@@ -981,7 +1007,8 @@ class TopWidget(urwid.Pile):
         self.db_status_panel = urwid.Pile([
             repo.status_indicator_widget for repo in self.bib_repos])
 
-        self.output_repo.selected_keys_panel = self.selected_keys_panel
+        for repo in self.output_repos:
+            repo.selected_keys_panel = self.selected_keys_panel
 
         self.right_panel = urwid.Pile([
             ('pack', urwid.LineBox(self.db_status_panel, title="Database Info")),
@@ -996,8 +1023,130 @@ class TopWidget(urwid.Pile):
                          (self.main_widget, ('weight', 1)),
                          (self.message_bar, ('pack', None))]
 
+class DefaultConfig(dict):
+    def __init__(self):
+        self['ro_repos'] = [
+            {
+                'remote': "dblp.org",
+                'enabled': True
+            },
+            {
+                'glob': "/path/to/lots/of/**/*.bib",
+                'enabled': True
+            },
+            {
+                'glob': "/path/to/sample.bib",
+                'enabled': False
+            },
+            {
+                'glob': "/path/to/another/sample.bib"
+            }
+        ]
+
+        self['rw_repos'] = [
+            {
+                'glob': "reference.bib",
+                'enabled': True
+            }
+        ]
+
+    def Write(self, file):
+        with open(file, 'w') as f:
+            json.dump(self, f, indent=4)
+
+class ArgParser(argparse.ArgumentParser):
+    def __init__(self):
+        super().__init__(prog="bibrarian")
+
+        self.add_argument("-f", "--config",
+                          help="force configuration file path",
+                          default=".bibrarian_config.json",
+                          action='store'
+                          )
+        self.add_argument("-g", "--gen-config",
+                          help="generate a configuration file",
+                          default=False,
+                          action='store_true')
+        self.add_argument("-l", "--log",
+                          help="force log file path",
+                          default=f"/tmp/{getpass.getuser()}_babrarian.log",
+                          action='store')
+        self.add_argument("-k", "--keys-output",
+                          help="output bib keys file (truncate mode)",
+                          action='store')
+        self.add_argument("-v", "--version",
+                          action='version',
+                          version="%(prog)s 1.0")
+
+class Palette(list):
+    def __init__(self):
+        self.append(('search_label', 'yellow', 'dark magenta'))
+        self.append(('search_content', 'white', 'dark magenta'))
+        self.append(('search_hint', 'light cyan', 'dark magenta'))
+
+        self.append(('msg_tips', 'white', 'dark gray'))
+        self.append(('msg_normal', 'light green', 'dark gray'))
+        self.append(('msg_warning', 'yellow', 'dark gray'))
+        self.append(('msg_error', 'light red', 'dark gray'))
+
+        self.append(('details_hint', 'dark green', 'default'))
+
+        self.append(('db_label', 'default', 'default'))
+        self.append(('db_enabled', 'light cyan', 'default'))
+        self.append(('db_status_ready', 'light green', 'default'))
+        self.append(('db_status_loading', 'light cyan', 'default'))
+        self.append(('db_status_searching', 'yellow', 'default'))
+        self.append(('db_status_error', 'light red', 'default'))
+        self.append(('db_rw', 'light magenta', 'default'))
+        self.append(('db_ro', 'light green', 'default'))
+
+        self.append(('mark_none', 'default', 'dark gray'))
+        self.append(('mark_selected', 'light cyan', 'dark gray'))
+        self.append(('title', 'yellow', 'dark gray'))
+        self.append(('title_delim', 'default', 'dark gray'))
+        self.append(('source', 'dark green', 'default'))
+        self.append(('author', 'white', 'default'))
+        self.append(('venue', 'underline', 'default'))
+        self.append(('year', 'light gray', 'default'))
+        self.append(('delim', 'default', 'default'))
+        self.append(('bibkey', 'light green', 'default'))
+        self.append(('bibtex_ready', 'dark green', 'default'))
+        self.append(('bibtex_fetching', 'yellow', 'default'))
+
+        self.append(('plain+', 'default', 'dark magenta'))
+        self.append(('mark_none+', 'default', 'light magenta'))
+        self.append(('mark_selected+', 'light cyan', 'light magenta'))
+        self.append(('title+', 'yellow', 'light magenta'))
+        self.append(('title_delim+', 'default', 'light magenta'))
+        self.append(('source+', 'light green', 'dark magenta'))
+        self.append(('author+', 'white', 'dark magenta'))
+        self.append(('venue+', 'white,underline', 'dark magenta'))
+        self.append(('year+', 'white', 'dark magenta'))
+        self.append(('delim+', 'default', 'dark magenta'))
+        self.append(('bibkey+', 'light green', 'dark magenta'))
+        self.append(('bibtex_ready+', 'dark green', 'dark magenta'))
+        self.append(('bibtex_fetching+', 'yellow', 'dark magenta'))
+
+        self.append(('selected_key', 'light cyan', 'default'))
+        self.append(('selected_hint', 'dark cyan', 'default'))
+
+        self.append(('detail_key', 'light green', 'default'))
+        self.append(('detail_value', 'default', 'default'))
+
+        self.append(('banner_hi', 'light magenta', 'default'))
+        self.append(('banner_lo', 'dark magenta', 'default'))
+
 if __name__ == '__main__':
-    logging.basicConfig(filename=f"/tmp/{getpass.getuser()}_babrarian.log",
+    args = ArgParser().parse_args()
+
+    if args.gen_config:
+        DefaultConfig().Write(args.config)
+        print(f"Wrote default config to file {args.config}")
+        sys.exit(0)
+
+    palette = Palette()
+
+    logging.basicConfig(filename=args.log,
                         format="[%(asctime)s %(levelname)7s] %(threadName)s: %(message)s",
                         datefmt="%m-%d-%Y %H:%M:%S",
                         level=logging.DEBUG)
@@ -1059,7 +1208,7 @@ if __name__ == '__main__':
                ('banner_lo', 'dark magenta', 'default'),
                ]
 
-    with open("config.json") as config_file:
+    with open(args.config) as config_file:
         config = json.load(config_file)
 
     input_filter = InputFilter()
@@ -1067,7 +1216,7 @@ if __name__ == '__main__':
                                palette=palette,
                                input_filter=input_filter)
 
-    top_widget = TopWidget(config, main_loop)
+    top_widget = TopWidget(args, config, main_loop)
 
     input_filter.widget = top_widget
     main_loop.widget = top_widget

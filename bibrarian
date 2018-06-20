@@ -1,5 +1,5 @@
 #!/bin/sh
 
-SCRIPT_DIR="$(builtin cd "$(dirname "$0")"; builtin pwd)"
+SCRIPT_DIR="$(builtin cd "$(dirname "$(readlink -f "$0")")"; builtin pwd)"
 
-python3 $SCRIPT_DIR/main.py
+python3 $SCRIPT_DIR/main.py $*
