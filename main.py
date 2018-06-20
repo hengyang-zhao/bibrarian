@@ -628,7 +628,8 @@ class BibRepo:
 
 class BibtexRepo(BibRepo):
     def __init__(self, glob_expr, event_loop, enabled):
-        super().__init__(glob_expr, event_loop, enabled)
+        super().__init__(os.path.expandvars(os.path.expanduser(glob_expr)),
+                         event_loop, enabled)
         self.bib_files = []
         self.bib_entries = []
 
@@ -980,6 +981,12 @@ class InputFilter:
         else:
             return False
 
+class DatabaseStatusPanel(urwid.Pile):
+    def __init__(self, databases, config_source):
+        super().__init__([])
+        self.contents = [(db, ('pack', None)) for db in databases] \
+                      + [(urwid.Text(('cfg_src', f"config: {config_source}")), ('pack', None))]
+
 class TopWidget(urwid.Pile):
     def __init__(self, args, config, event_loop):
         super().__init__([urwid.SolidFill()])
@@ -1004,8 +1011,9 @@ class TopWidget(urwid.Pile):
         self.search_bar.bib_repos = self.bib_repos
         self.search_bar.search_results_panel = self.search_results_panel
 
-        self.db_status_panel = urwid.Pile([
-            repo.status_indicator_widget for repo in self.bib_repos])
+        self.db_status_panel = DatabaseStatusPanel(
+            [repo.status_indicator_widget for repo in self.bib_repos],
+            config.source)
 
         for repo in self.output_repos:
             repo.selected_keys_panel = self.selected_keys_panel
@@ -1053,6 +1061,22 @@ class DefaultConfig(dict):
     def Write(self, file):
         with open(file, 'w') as f:
             json.dump(self, f, indent=4)
+
+class Config(dict):
+    def __init__(self, file_name):
+        prefix = os.path.dirname(os.getcwd())
+        self.source = None
+
+        while True:
+            path = os.path.join(prefix, file_name)
+            if os.path.isfile(path) and os.access(path, os.R_OK):
+                with open(path) as f:
+                    self.update(json.load(f))
+                    self.source = path
+                    break
+
+            if prefix == '/': break
+            prefix = os.path.dirname(prefix)
 
 class ArgParser(argparse.ArgumentParser):
     def __init__(self):
@@ -1136,6 +1160,8 @@ class Palette(list):
         self.append(('banner_hi', 'light magenta', 'default'))
         self.append(('banner_lo', 'dark magenta', 'default'))
 
+        self.append(('cfg_src', 'dark gray', 'default'))
+
 if __name__ == '__main__':
     args = ArgParser().parse_args()
 
@@ -1144,76 +1170,21 @@ if __name__ == '__main__':
         print(f"Wrote default config to file {args.config}")
         sys.exit(0)
 
-    palette = Palette()
-
     logging.basicConfig(filename=args.log,
                         format="[%(asctime)s %(levelname)7s] %(threadName)s: %(message)s",
                         datefmt="%m-%d-%Y %H:%M:%S",
                         level=logging.DEBUG)
 
-    palette = [('search_label', 'yellow', 'dark magenta'),
-               ('search_content', 'white', 'dark magenta'),
-               ('search_hint', 'light cyan', 'dark magenta'),
-
-               ('msg_tips', 'white', 'dark gray'),
-               ('msg_normal', 'light green', 'dark gray'),
-               ('msg_warning', 'yellow', 'dark gray'),
-               ('msg_error', 'light red', 'dark gray'),
-
-               ('details_hint', 'dark green', 'default'),
-
-               ('db_label', 'default', 'default'),
-               ('db_enabled', 'light cyan', 'default'),
-               ('db_status_ready', 'light green', 'default'),
-               ('db_status_loading', 'light cyan', 'default'),
-               ('db_status_searching', 'yellow', 'default'),
-               ('db_status_error', 'light red', 'default'),
-               ('db_rw', 'light magenta', 'default'),
-               ('db_ro', 'light green', 'default'),
-
-               ('mark_none', 'default', 'dark gray'),
-               ('mark_selected', 'light cyan', 'dark gray'),
-               ('title', 'yellow', 'dark gray'),
-               ('title_delim', 'default', 'dark gray'),
-               ('source', 'dark green', 'default'),
-               ('author', 'white', 'default'),
-               ('venue', 'underline', 'default'),
-               ('year', 'light gray', 'default'),
-               ('delim', 'default', 'default'),
-               ('bibkey', 'light green', 'default'),
-               ('bibtex_ready', 'dark green', 'default'),
-               ('bibtex_fetching', 'yellow', 'default'),
-
-               ('plain+', 'default', 'dark magenta'),
-               ('mark_none+', 'default', 'light magenta'),
-               ('mark_selected+', 'light cyan', 'light magenta'),
-               ('title+', 'yellow', 'light magenta'),
-               ('title_delim+', 'default', 'light magenta'),
-               ('source+', 'light green', 'dark magenta'),
-               ('author+', 'white', 'dark magenta'),
-               ('venue+', 'white,underline', 'dark magenta'),
-               ('year+', 'white', 'dark magenta'),
-               ('delim+', 'default', 'dark magenta'),
-               ('bibkey+', 'light green', 'dark magenta'),
-               ('bibtex_ready+', 'dark green', 'dark magenta'),
-               ('bibtex_fetching+', 'yellow', 'dark magenta'),
-
-               ('selected_key', 'light cyan', 'default'),
-               ('selected_hint', 'dark cyan', 'default'),
-
-               ('detail_key', 'light green', 'default'),
-               ('detail_value', 'default', 'default'),
-
-               ('banner_hi', 'light magenta', 'default'),
-               ('banner_lo', 'dark magenta', 'default'),
-               ]
-
-    with open(args.config) as config_file:
-        config = json.load(config_file)
+    config = Config(args.config)
+    if config.source is None:
+        print("Did not find any config file.")
+        print("You can generate an example config file using option -g.")
+        print("For more information, please use option -h for help.")
+        sys.exit(1)
 
     input_filter = InputFilter()
     main_loop = urwid.MainLoop(urwid.SolidFill(),
-                               palette=palette,
+                               palette=Palette(),
                                input_filter=input_filter)
 
     top_widget = TopWidget(args, config, main_loop)
