@@ -818,7 +818,9 @@ class SelectedKeysPanel(urwid.Pile):
         if self.keys_output is None: return
 
         with open(self.keys_output, 'w') as f:
-            print(','.join(map(lambda e: e.bibkey, self.entries.values())), file=f)
+            print(','.join(map(lambda e: e.bibkey, self.entries.values())),
+                  file=f, end='')
+
             logging.info(f"Wrote selected keys to file '{self.keys_output}'")
 
 class SearchBar(urwid.AttrMap):
