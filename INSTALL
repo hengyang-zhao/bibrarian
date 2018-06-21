@@ -1,0 +1,28 @@
+INSTALLATION GUIDE
+
+The installation is yet not script-automated. It is quite easy to manually
+setup though!
+
+1. Let the executable `bibrarian` be under your `PATH` environment variable.
+   Possible ways:
+
+   - Append bibrarian project directory to your `PATH`
+
+        export PATH=$PATH:<BIBRARIAN_PROJECT_DIR>
+
+     and put the above line in your ~/.bashrc file.
+
+   - Soft-link script `bibrarian` to somewhere already in `PATH`
+
+        $ cd <SOMEWHERE_IN_PATH>
+        $ ln -s <BIBRARIAN_PROJECT_DIR>/bibrarian .
+
+
+   To test, do the following in your terminal and expect a help message.
+
+        $ bibrarian -h
+
+2. (optional) Install the plugin for your favorite editor.
+
+   - vim: Let vim source file `editor_plugins/bibrarian.vim` on startup.
+   - emacs: (plugin to be implemented)
