@@ -630,23 +630,33 @@ class BibtexRepo(BibRepo):
     def __init__(self, glob_expr, event_loop, enabled):
         super().__init__(os.path.expandvars(os.path.expanduser(glob_expr)),
                          event_loop, enabled)
-        self.bib_files = []
-        self.bib_entries = []
+        self._bib_files = []
+        self._bib_entries = []
+
+    @property
+    def bib_entries(self):
+        self.loading_done.wait()
+        return self._bib_entries
+
+    @property
+    def bib_files(self):
+        self.loading_done.wait()
+        return self._bib_files
 
     def LoadingThreadMain(self):
         glob_expr = self.source
         logging.debug(f"Collecting entries from glob expression '{glob_expr}'")
 
-        self.bib_files = glob.glob(glob_expr, recursive=True)
+        self._bib_files = glob.glob(glob_expr, recursive=True)
 
-        if not self.bib_files:
+        if not self._bib_files:
             logging.warning(f"Glob expr '{glob_expr}' matches no target")
             if self.message_bar is not None:
                 self.message_bar.Post(f"Glob expr '{glob_expr}' matches no target.",
                                       'warning')
             return 'no file'
 
-        for path in self.bib_files:
+        for path in self._bib_files:
 
             try:
                 bib_data = pybtex.database.parse_file(path)
@@ -655,7 +665,7 @@ class BibtexRepo(BibRepo):
                 continue
 
             for key, entry in bib_data.entries.iteritems():
-                self.bib_entries.append(BibtexEntry(key, entry, self, path))
+                self._bib_entries.append(BibtexEntry(key, entry, self, path))
 
             logging.debug(f"Parsed {len(bib_data.entries)} entries from file {path}")
 
