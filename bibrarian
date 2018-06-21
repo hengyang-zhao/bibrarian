@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 SCRIPT_DIR="$(builtin cd "$(dirname "$(readlink -f "$0")")"; builtin pwd)"
 
