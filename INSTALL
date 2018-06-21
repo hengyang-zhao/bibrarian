@@ -3,6 +3,8 @@ INSTALLATION GUIDE
 The installation is yet not script-automated. It is quite easy to manually
 setup though!
 
+0. You need python3.6, urwid, and pybtex.
+
 1. Let the executable `bibrarian` be under your `PATH` environment variable.
    Possible ways:
 
@@ -24,5 +26,5 @@ setup though!
 
 2. (optional) Install the plugin for your favorite editor.
 
-   - vim: Let vim source file `editor_plugins/bibrarian.vim` on startup.
-   - emacs: (plugin to be implemented)
+   - Vim: Let vim source file `editor_plugins/bibrarian.vim` on startup.
+   - Emacs: (plugin to be implemented)
