@@ -1076,7 +1076,7 @@ class DefaultConfig(dict):
 
 class Config(dict):
     def __init__(self, file_name):
-        prefix = os.path.dirname(os.getcwd())
+        prefix = os.getcwd()
         self.source = None
 
         while True:
