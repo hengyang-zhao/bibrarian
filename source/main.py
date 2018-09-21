@@ -112,6 +112,9 @@ class BibEntry:
         for keyword in filter(lambda k: len(k) >= 3, keywords):
             trivial = False
 
+            if keyword.upper() in self.unique_key.upper():
+                continue
+
             if keyword.upper() in self.title.upper():
                 continue
 
