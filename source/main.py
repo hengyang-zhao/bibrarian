@@ -631,8 +631,7 @@ class BibRepo:
 
 class BibtexRepo(BibRepo):
     def __init__(self, glob_expr, event_loop, enabled):
-        super().__init__(os.path.expandvars(os.path.expanduser(glob_expr)),
-                         event_loop, enabled)
+        super().__init__(glob_expr, event_loop, enabled)
         self._bib_files = []
         self._bib_entries = []
 
@@ -1092,6 +1091,19 @@ class Config(dict):
 
             if prefix == '/': break
             prefix = os.path.dirname(prefix)
+
+        self._NormalizePaths()
+
+    def _NormalizePaths(self):
+        config_dir = os.path.dirname(os.path.realpath(self.source))
+        for repo_group in (self[k] for k in ('ro_repos', 'rw_repos')):
+            for repo_config in repo_group:
+                if 'glob' in repo_config:
+                    repo_config['glob'] = os.path.expandvars(os.path.expanduser(repo_config['glob']))
+
+                    if not os.path.isabs(repo_config['glob']):
+                        repo_config['glob'] = os.path.join(config_dir, repo_config['glob'])
+
 
 class ArgParser(argparse.ArgumentParser):
     def __init__(self):
