@@ -666,7 +666,7 @@ class BibtexRepo(BibRepo):
                 logging.error(f"Exception raised when parsing file {path}: {e}")
                 continue
 
-            for key, entry in bib_data.entries.iteritems():
+            for key, entry in iter(bib_data.entries.items()):
                 self._bib_entries.append(BibtexEntry(key, entry, self, path))
 
             logging.debug(f"Parsed {len(bib_data.entries)} entries from file {path}")
