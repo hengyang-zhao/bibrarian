@@ -666,7 +666,7 @@ class BibtexRepo(BibRepo):
                 logging.error(f"Exception raised when parsing file {path}: {e}")
                 continue
 
-            for key, entry in bib_data.entries.iteritems():
+            for key, entry in iter(bib_data.entries.items()):
                 self._bib_entries.append(BibtexEntry(key, entry, self, path))
 
             logging.debug(f"Parsed {len(bib_data.entries)} entries from file {path}")
@@ -1092,6 +1092,12 @@ class Config(dict):
             if prefix == '/': break
             prefix = os.path.dirname(prefix)
 
+        if self.source is None:
+            print("Did not find any config file.")
+            print("You can generate an example config file using option -g.")
+            print("For more information, please use option -h for help.")
+            sys.exit(1)
+
         self._NormalizePaths()
 
     def _NormalizePaths(self):
@@ -1203,11 +1209,6 @@ if __name__ == '__main__':
                         level=logging.DEBUG)
 
     config = Config(args.config)
-    if config.source is None:
-        print("Did not find any config file.")
-        print("You can generate an example config file using option -g.")
-        print("For more information, please use option -h for help.")
-        sys.exit(1)
 
     input_filter = InputFilter()
     main_loop = urwid.MainLoop(urwid.SolidFill(),
